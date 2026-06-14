@@ -1,0 +1,28 @@
+# সেশন ফাইল (প্রাইভেট)
+session.json
+reddit_session.json
+
+# ডাউনলোডেড মিডিয়া
+downloaded_media/
+
+# ক্যাপচা লক ও কাউন্টার ফাইল (রানটাইম জেনারেট)
+captcha_lock.txt
+*.lock
+
+# ডেইলি লিমিট ও ক্যাশে (রানটাইম)
+daily_post_limit.json
+link_counter.json
+community_counter.json
+posted_cache.json
+
+# পাইথন ক্যাশে
+__pycache__/
+*.pyc
+
+# আইডিই
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
