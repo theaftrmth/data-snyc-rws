@@ -1,0 +1,87 @@
+name: Reddit to X Bot
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [run-bot]
+
+concurrency:
+  group: reddit-x-bot-group
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 380                # ৬ ঘণ্টা + ২০ মিনিট সেফটির জন্য
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chrome
+          # ভিডিও ডাউনলোডের জন্য প্রয়োজনীয় টুল
+          sudo apt-get update
+          sudo apt-get install -y yt-dlp ffmpeg
+
+      - name: Write Reddit session file
+        run: echo '${{ secrets.REDDIT_SESSION_JSON }}' > reddit_session.json
+
+      - name: Restore bot state cache
+        id: cache-restore
+        uses: actions/cache@v4
+        with:
+          path: |
+            posted_cache.json
+            link_counter.json
+            community_counter.json
+            captcha_lock.txt
+            daily_post_limit.json
+          key: bot-state-v2-${{ github.run_id }}
+          restore-keys: |
+            bot-state-v2-
+
+      - name: Run bot
+        env:
+          SESSION_JSON: ${{ secrets.SESSION_JSON }}
+          TARGET_CREATORS: ${{ secrets.TARGET_CREATORS }}
+          TARGET_SUBREDDITS: ${{ secrets.TARGET_SUBREDDITS }}
+          HEADLESS: "false"              # xvfb-র সাথে false রাখুন
+          PYTHONUNBUFFERED: 1
+        run: xvfb-run python rws.py     # আপনার স্ক্রিপ্টের নাম bot.py ধরে
+
+      - name: Save bot state cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            posted_cache.json
+            link_counter.json
+            community_counter.json
+            captcha_lock.txt
+            daily_post_limit.json
+          key: bot-state-v2-${{ github.run_id }}
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: debug-screenshots
+          path: |
+            captcha_debug_*.png
+            attach_fail_*.png
