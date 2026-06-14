@@ -2,16 +2,14 @@ import time
 import random
 import re
 import os
-import hashlib
+import json
 import requests
 import subprocess
-import json
-import pytz
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
 
 # ═══════════════════════════════════════════════════════════
-# SOURCES — Reddit creators & subreddits (Twitter sources gone)
+# SOURCES — Reddit creators & subreddits
 # ═══════════════════════════════════════════════════════════
 def _env_list(key, default=""):
     val = os.environ.get(key)
@@ -21,18 +19,15 @@ def _env_list(key, default=""):
         return [item.strip() for item in val.split(",") if item.strip()]
     return val
 
-TARGET_CREATORS   = _env_list("TARGET_CREATORS")   # e.g. "user1,user2"
-TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS") # e.g. "sub1,sub2"
+TARGET_CREATORS   = _env_list("TARGET_CREATORS")
+TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS")
 
-# Fixed landing page for link suffix
 LANDING_PAGE_URL = "https://redditwithsound.pages.dev/"
 
-# Limit settings
 MAX_DIRECT_LINKS         = 10
 MAX_BIO_LINKS            = 5
 MAX_COMMUNITY_POSTS_PER_DAY = 2
 
-# File paths (env overridable)
 SESSION_FILE            = os.environ.get("SESSION_FILE", "session.json")
 REDDIT_SESSION_FILE     = os.environ.get("REDDIT_SESSION_FILE", "reddit_session.json")
 LINK_COUNTER_FILE       = os.environ.get("LINK_COUNTER_FILE", "link_counter.json")
@@ -45,7 +40,6 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 USE_LINK_SHORTENER = os.environ.get("USE_LINK_SHORTENER", "True").lower() == "true"
 
-# Hardcoded X communities
 X_COMMUNITIES = [
     "https://x.com/i/communities/1680111154108981250",
     "https://twitter.com/i/communities/1696464643940827249",
@@ -86,7 +80,7 @@ def validate_session():
     return True
 
 # ═══════════════════════════════════════════════════════════
-# CAPTCHA LOCK (unchanged from original)
+# CAPTCHA LOCK
 # ═══════════════════════════════════════════════════════════
 def is_captcha_locked():
     if not os.path.exists(CAPTCHA_LOCK_FILE):
@@ -147,7 +141,7 @@ def check_captcha(page):
     return False
 
 # ═══════════════════════════════════════════════════════════
-# CACHE — 7-day posted memory (replaces old hash cache)
+# CACHE — 7-day posted memory
 # ═══════════════════════════════════════════════════════════
 def load_posted_cache() -> dict:
     if not os.path.exists(POSTED_CACHE_FILE):
@@ -179,7 +173,7 @@ def mark_as_posted(post_id: str, cache: dict) -> dict:
     return cache
 
 # ═══════════════════════════════════════════════════════════
-# DAILY POST LIMIT (unchanged)
+# DAILY POST LIMIT
 # ═══════════════════════════════════════════════════════════
 def get_daily_limit():
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -373,73 +367,42 @@ def _parse_reddit_children(children: list) -> list[dict]:
     return posts
 
 # ═══════════════════════════════════════════════════════════
-# REDDIT FETCHING (Playwright)
+# REDDIT FETCHING (requests instead of Playwright)
 # ═══════════════════════════════════════════════════════════
-def get_creator_posts_playwright(username: str) -> list[dict]:
+def _load_reddit_cookies() -> dict:
     if not os.path.exists(REDDIT_SESSION_FILE):
-        print(f"  ❌ Reddit session missing! Run get_reddit_session.py first.")
-        return []
+        return {}
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled"]
-            )
-            context = browser.new_context(
-                storage_state=REDDIT_SESSION_FILE,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/123.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1280, "height": 800},
-            )
-            page = context.new_page()
-            print(f"  🌐 Fetching u/{username}...")
-            json_url = f"https://www.reddit.com/user/{username}/submitted.json?limit=25&sort=new"
-            page.goto(json_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
-            content = page.inner_text("body")
-            browser.close()
-        data = json.loads(content)
+        with open(REDDIT_SESSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cookies = {}
+        for c in data.get("cookies", []):
+            cookies[c["name"]] = c["value"]
+        return cookies
+    except Exception as e:
+        print(f"  ❌ Reddit session parse error: {e}")
+        return {}
+
+def _fetch_reddit_posts(url: str) -> list[dict]:
+    cookies = _load_reddit_cookies()
+    try:
+        print(f"  🌐 Fetching (requests): {url}")
+        resp = requests.get(url, headers=REDDIT_HEADERS, cookies=cookies, timeout=30)
+        if resp.status_code != 200:
+            print(f"  ❌ HTTP {resp.status_code}")
+            return []
+        data = resp.json()
         children = data.get("data", {}).get("children", [])
     except Exception as e:
-        print(f"  ❌ Reddit fetch failed for u/{username}: {e}")
+        print(f"  ❌ Fetch failed: {e}")
         return []
     return _parse_reddit_children(children)
 
+def get_creator_posts_playwright(username: str) -> list[dict]:
+    return _fetch_reddit_posts(f"https://www.reddit.com/user/{username}/submitted.json?limit=25&sort=new")
+
 def get_subreddit_posts_playwright(subreddit: str) -> list[dict]:
-    if not os.path.exists(REDDIT_SESSION_FILE):
-        print(f"  ❌ Reddit session missing!")
-        return []
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled"]
-            )
-            context = browser.new_context(
-                storage_state=REDDIT_SESSION_FILE,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/123.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1280, "height": 800},
-            )
-            page = context.new_page()
-            print(f"  🌐 Fetching r/{subreddit}...")
-            json_url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25"
-            page.goto(json_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
-            content = page.inner_text("body")
-            browser.close()
-        data = json.loads(content)
-        children = data.get("data", {}).get("children", [])
-    except Exception as e:
-        print(f"  ❌ Subreddit fetch failed for r/{subreddit}: {e}")
-        return []
-    return _parse_reddit_children(children)
+    return _fetch_reddit_posts(f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25")
 
 # ═══════════════════════════════════════════════════════════
 # MEDIA DOWNLOAD
@@ -615,14 +578,12 @@ def rewrite_title_locally(original: str) -> str:
 # GROK REWRITE (reuses existing X browser context)
 # ═══════════════════════════════════════════════════════════
 def grok_rewrite_using_context(context, original: str) -> str | None:
-    """Open a new page in the logged-in X context, ask Grok to rewrite, return cleaned text."""
     page = context.new_page()
     try:
         print("  🌐 Grok page loading...")
         page.goto("https://x.com/i/grok", wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
 
-        # find textarea
         textarea = None
         for sel in ['textarea[placeholder="Ask anything"]', 'textarea']:
             try:
@@ -650,7 +611,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         textarea.fill(prompt)
         page.wait_for_timeout(random.uniform(500, 800))
 
-        # submit
         sent = False
         for btn_sel in [
             'button[aria-label="Send"]',
@@ -692,7 +652,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                 break
 
         if response_text:
-            # parse title / tags
             title_part = ""
             tags_part  = ""
             for line in response_text.splitlines():
@@ -703,7 +662,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                     tags_part = line[5:].strip()
             if not title_part:
                 title_part = response_text.strip()
-            # clean
             title_part = re.sub(r'^(Rewritten:|Original:|Title:|Output:)\s*', "", title_part, flags=re.IGNORECASE)
             title_part = re.sub(r'\*+|_+|#+|`+', "", title_part).strip().strip('"\' ')
             tags_part  = tags_part.strip()
@@ -777,7 +735,7 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
     return tweet
 
 # ═══════════════════════════════════════════════════════════
-# X POSTING HELPERS (kept from original, with community post addition)
+# X POSTING HELPERS
 # ═══════════════════════════════════════════════════════════
 def human_mouse_move(page, target_x, target_y, steps=15):
     start_x, start_y = random.randint(100, 300), random.randint(100, 300)
@@ -899,7 +857,6 @@ def post_to_community(page, community_url, text, media_paths):
         page.wait_for_timeout(random.randint(5000, 8000))
         if check_captcha(page):
             raise Exception("CAPTCHA_DETECTED")
-        # Find sidebar new post button
         post_btn = None
         for sel in [
             'a[data-testid="SideNav_NewTweet_Button"]',
@@ -917,7 +874,6 @@ def post_to_community(page, community_url, text, media_paths):
             return False
         post_btn.click()
         page.wait_for_timeout(random.randint(2000, 3500))
-        # Now use common type_and_submit
         return type_and_submit(page, text, media_paths)
     except Exception as e:
         if "CAPTCHA_DETECTED" in str(e):
@@ -926,10 +882,9 @@ def post_to_community(page, community_url, text, media_paths):
         return False
 
 # ═══════════════════════════════════════════════════════════
-# MAIN REDDIT POST FUNCTION (replaces perform_post_only)
+# MAIN REDDIT POST FUNCTION
 # ═══════════════════════════════════════════════════════════
 def perform_reddit_post(page, context, posted_cache):
-    # Decide if community post
     eligible_communities = get_eligible_communities()
     post_destination = "profile"
     chosen_community = None
@@ -947,7 +902,6 @@ def perform_reddit_post(page, context, posted_cache):
     else:
         print("👤 Posting to profile.")
 
-    # Build combined source list
     sources = []
     if TARGET_CREATORS:
         for u in TARGET_CREATORS:
@@ -1004,22 +958,18 @@ def perform_reddit_post(page, context, posted_cache):
 
     print(f"\n🏆 Final: @{chosen_source_name} ({chosen_source_type}) - {chosen_post['title'][:80]}")
 
-    # Download media
     print("📥 Downloading media...")
     media_path, is_video = fetch_post_media(chosen_post)
     print(f"   Media: {media_path or 'None'} | Video: {is_video}")
 
-    # Determine suffix type
     suffix_type = decide_suffix_type()
     increment_link_counter(suffix_type)
 
-    # Build tweet (Grok rewrite)
     print("🤖 Building tweet...")
     hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type,
                                   is_video, context, suffix_type)
     print(f"   Tweet: {hook_tweet}")
 
-    # Post
     media_list = [media_path] if media_path else []
     posted = False
     if post_destination == "community":
@@ -1033,13 +983,11 @@ def perform_reddit_post(page, context, posted_cache):
         print("❌ Post failed.")
         return False
 
-    # Update caches
     posted_cache = mark_as_posted(chosen_post["id"], posted_cache)
     limit_reached = increment_daily_counter()
     print("✅ Post successful!")
     if limit_reached:
         print("🎯 Daily post limit reached.")
-    # Cleanup media
     if media_path and os.path.exists(media_path):
         try:
             os.remove(media_path)
@@ -1048,7 +996,7 @@ def perform_reddit_post(page, context, posted_cache):
     return True
 
 # ═══════════════════════════════════════════════════════════
-# MAIN LOOP (unchanged structure, now calls Reddit function)
+# MAIN LOOP
 # ═══════════════════════════════════════════════════════════
 def human_delay(iteration, hour):
     if 6 <= hour < 10:
@@ -1105,7 +1053,6 @@ def run_bot_loop():
         )
         page = context.new_page()
 
-        # Fingerprint spoofing (same as original)
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
