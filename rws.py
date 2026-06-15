@@ -22,10 +22,11 @@ def _env_list(key, default=""):
 TARGET_CREATORS   = _env_list("TARGET_CREATORS")
 TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS")
 
-LANDING_PAGE_URL = "https://redditwithsound.pages.dev/"
+LANDING_PAGE_URL = "https://redditwsound.pages.dev/"
 
-MAX_DIRECT_LINKS         = 10
-MAX_BIO_LINKS            = 5
+# বর্ধিত লিমিট (প্রতিদিন ৩৫-৫৫ পোস্টের সাথে সামঞ্জস্যপূর্ণ)
+MAX_DIRECT_LINKS         = 25
+MAX_BIO_LINKS            = 15
 MAX_COMMUNITY_POSTS_PER_DAY = 2
 
 SESSION_FILE            = os.environ.get("SESSION_FILE", "session.json")
@@ -37,8 +38,6 @@ CAPTCHA_LOCK_FILE       = os.environ.get("CAPTCHA_LOCK_FILE", "captcha_lock.txt"
 DAILY_LIMIT_FILE        = os.environ.get("DAILY_LIMIT_FILE", "daily_post_limit.json")
 MEDIA_DIR               = os.environ.get("MEDIA_DIR", "downloaded_media")
 os.makedirs(MEDIA_DIR, exist_ok=True)
-
-USE_LINK_SHORTENER = os.environ.get("USE_LINK_SHORTENER", "True").lower() == "true"
 
 X_COMMUNITIES = [
     "https://x.com/i/communities/1680111154108981250",
@@ -227,13 +226,18 @@ def decide_suffix_type() -> str:
     data        = _reset_if_new_day(load_link_counter())
     direct_done = data.get("direct", 0)
     bio_done    = data.get("bio", 0)
-    EXPECTED    = 19
+    # আজকের টার্গেট থেকে EXPECTED পোস্ট সংখ্যা
+    target, _   = get_daily_limit()
+    EXPECTED    = max(target, 1)
     total_done  = direct_done + bio_done
+    posts_left  = max(EXPECTED - total_done, 1)
+
     direct_remaining = MAX_DIRECT_LINKS - direct_done
     bio_remaining    = MAX_BIO_LINKS    - bio_done
-    posts_left       = max(EXPECTED - total_done, 1)
+
     p_direct = direct_remaining / posts_left if direct_remaining > 0 else 0
     p_bio    = bio_remaining    / posts_left if bio_remaining    > 0 else 0
+
     r = random.random()
     if r < p_direct:
         result = "direct"
@@ -241,6 +245,7 @@ def decide_suffix_type() -> str:
         result = "bio"
     else:
         result = "username"
+
     print(f"  🎲 Suffix type → {result} (direct {direct_done}/{MAX_DIRECT_LINKS}, bio {bio_done}/{MAX_BIO_LINKS})")
     return result
 
@@ -367,7 +372,7 @@ def _parse_reddit_children(children: list) -> list[dict]:
     return posts
 
 # ═══════════════════════════════════════════════════════════
-# REDDIT FETCHING (requests instead of Playwright)
+# REDDIT FETCHING (requests)
 # ═══════════════════════════════════════════════════════════
 def _load_reddit_cookies() -> dict:
     if not os.path.exists(REDDIT_SESSION_FILE):
@@ -504,23 +509,6 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
     ext  = ext.group(0) if ext else ".jpg"
     path = download_image(url, f"img_{ts}{ext}")
     return path, False
-
-# ═══════════════════════════════════════════════════════════
-# LINK SHORTENER
-# ═══════════════════════════════════════════════════════════
-def shorten_url(long_url: str) -> str:
-    if not USE_LINK_SHORTENER:
-        return long_url
-    try:
-        r = requests.get(
-            f"https://tinyurl.com/api-create.php?url={long_url}",
-            timeout=10
-        )
-        if r.status_code == 200 and r.text.strip().startswith("http"):
-            return r.text.strip()
-    except Exception as e:
-        print(f"  ⚠️  Shortener failed: {e}")
-    return long_url
 
 # ═══════════════════════════════════════════════════════════
 # LOCAL TITLE REWRITE (synonym replacement)
@@ -715,9 +703,9 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
         title    = rewrite_title_locally(original_title)
         hashtags = "#NSFW #Reddit"
 
+    # লিংক শর্টেনার বাদ — সরাসরি LANDING_PAGE_URL
     if suffix_type == "direct":
-        landing_url = shorten_url(LANDING_PAGE_URL) if USE_LINK_SHORTENER else LANDING_PAGE_URL
-        suffix = f"\n\nWant to see something darker? 👀\n{landing_url}"
+        suffix = f"\n\nWant to see something darker? 👀\n{LANDING_PAGE_URL}"
     elif suffix_type == "bio":
         suffix = "\n\nWant to see something darker? 👀\nLink in bio ↑"
     else:
@@ -814,6 +802,7 @@ def type_and_submit(page, text, media_paths):
     page.wait_for_timeout(random.randint(500, 1200))
     btn.click()
     page.wait_for_timeout(5000)
+    return True          # পোস্ট সফল হলে True রিটার্ন
 
 def open_compose_and_post(page, text, media_paths):
     for method_num, method in enumerate(["keyboard", "sidenav", "direct"], 1):
@@ -839,9 +828,10 @@ def open_compose_and_post(page, text, media_paths):
                 if check_captcha(page):
                     raise Exception("CAPTCHA_DETECTED")
             page.wait_for_timeout(random.randint(2000, 4000))
-            type_and_submit(page, text, media_paths)
-            print(f"  ✅ Method {method_num} success!")
-            return True
+            success = type_and_submit(page, text, media_paths)
+            if success:
+                print(f"  ✅ Method {method_num} success!")
+                return True
         except Exception as e:
             if "CAPTCHA_DETECTED" in str(e):
                 raise
