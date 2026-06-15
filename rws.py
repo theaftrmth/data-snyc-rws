@@ -40,7 +40,7 @@ MEDIA_DIR               = os.environ.get("MEDIA_DIR", "downloaded_media")
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
 X_COMMUNITIES = [
-    "https://x.com/i/communities/1680111154108981250",
+    "https://x.com/i/communities/1789481422090289193",
     "https://twitter.com/i/communities/1696464643940827249",
     "https://twitter.com/i/communities/1856975516160721170",
     "https://twitter.com/i/communities/1851494480442212618",
