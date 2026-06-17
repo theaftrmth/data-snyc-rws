@@ -22,7 +22,7 @@ def _env_list(key, default=""):
 TARGET_CREATORS   = _env_list("TARGET_CREATORS")
 TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS")
 
-LANDING_PAGE_URL = "https://redditwsound.pages.dev/"
+LANDING_PAGE_URL = "https://redditwithsound.pages.dev/"
 
 # বর্ধিত লিমিট (প্রতিদিন ৩৫-৫৫ পোস্টের সাথে সামঞ্জস্যপূর্ণ)
 MAX_DIRECT_LINKS         = 25
