@@ -12,7 +12,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-22.04
-    timeout-minutes: 380                # ৬ ঘণ্টা + ২০ মিনিট সেফটির জন্য
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -34,9 +34,8 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           playwright install --with-deps chrome
-          # ভিডিও ডাউনলোডের জন্য প্রয়োজনীয় টুল
           sudo apt-get update
-          sudo apt-get install -y yt-dlp ffmpeg
+          sudo apt-get install -y yt-dlp ffmpeg xvfb
 
       - name: Write Reddit session file
         run: echo '${{ secrets.REDDIT_SESSION_JSON }}' > reddit_session.json
@@ -47,7 +46,6 @@ jobs:
         with:
           path: |
             posted_cache.json
-            link_counter.json
             community_counter.json
             captcha_lock.txt
             daily_post_limit.json
@@ -60,9 +58,9 @@ jobs:
           SESSION_JSON: ${{ secrets.SESSION_JSON }}
           TARGET_CREATORS: ${{ secrets.TARGET_CREATORS }}
           TARGET_SUBREDDITS: ${{ secrets.TARGET_SUBREDDITS }}
-          HEADLESS: "false"              # xvfb-র সাথে false রাখুন
+          HEADLESS: "false"
           PYTHONUNBUFFERED: 1
-        run: xvfb-run python rws.py     # আপনার স্ক্রিপ্টের নাম bot.py ধরে
+        run: xvfb-run python rws.py
 
       - name: Save bot state cache
         if: always()
@@ -70,7 +68,6 @@ jobs:
         with:
           path: |
             posted_cache.json
-            link_counter.json
             community_counter.json
             captcha_lock.txt
             daily_post_limit.json
