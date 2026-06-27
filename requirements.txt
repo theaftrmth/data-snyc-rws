@@ -1,3 +1,7 @@
 playwright
 requests
 pytz
+noisereduce
+soundfile
+numpy
+scipy
