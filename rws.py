@@ -8,6 +8,10 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
 
+# ── Audio enhancement (fix_audio.py) ──────────────────
+from fix_audio import process as _fix_audio_process
+HAS_FIX_AUDIO = True
+
 # ═══════════════════════════════════════════════════════════
 # SOURCES — Reddit creators & subreddits
 # ═══════════════════════════════════════════════════════════
@@ -24,14 +28,10 @@ TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS")
 
 LANDING_PAGE_URL = "https://redditwithsound.pages.dev/"
 
-# বর্ধিত লিমিট (প্রতিদিন ৩৫-৫৫ পোস্টের সাথে সামঞ্জস্যপূর্ণ)
-MAX_DIRECT_LINKS         = 25
-MAX_BIO_LINKS            = 15
 MAX_COMMUNITY_POSTS_PER_DAY = 2
 
 SESSION_FILE            = os.environ.get("SESSION_FILE", "session.json")
 REDDIT_SESSION_FILE     = os.environ.get("REDDIT_SESSION_FILE", "reddit_session.json")
-LINK_COUNTER_FILE       = os.environ.get("LINK_COUNTER_FILE", "link_counter.json")
 POSTED_CACHE_FILE       = os.environ.get("POSTED_CACHE_FILE", "posted_cache.json")
 COMMUNITY_COUNTER_FILE  = os.environ.get("COMMUNITY_COUNTER_FILE", "community_counter.json")
 CAPTCHA_LOCK_FILE       = os.environ.get("CAPTCHA_LOCK_FILE", "captcha_lock.txt")
@@ -172,7 +172,7 @@ def mark_as_posted(post_id: str, cache: dict) -> dict:
     return cache
 
 # ═══════════════════════════════════════════════════════════
-# DAILY POST LIMIT
+# DAILY POST LIMIT (এখন ১৪–১৬ পোস্ট/দিন)
 # ═══════════════════════════════════════════════════════════
 def get_daily_limit():
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -184,7 +184,7 @@ def get_daily_limit():
                 return data["target"], data["count"]
         except:
             pass
-    target = random.randint(35, 55)
+    target = random.randint(14, 16)          # প্রতিদিন ১৪-১৬টি পোস্ট
     data = {"date": today_str, "target": target, "count": 0}
     with open(DAILY_LIMIT_FILE, "w") as f:
         json.dump(data, f)
@@ -199,64 +199,6 @@ def increment_daily_counter():
         json.dump(data, f)
     print(f"📈 Daily count: {count}/{target}")
     return count >= target
-
-# ═══════════════════════════════════════════════════════════
-# LINK COUNTER (bio / direct / username)
-# ═══════════════════════════════════════════════════════════
-def load_link_counter() -> dict:
-    if not os.path.exists(LINK_COUNTER_FILE):
-        return {"date": "", "direct": 0, "bio": 0}
-    try:
-        with open(LINK_COUNTER_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {"date": "", "direct": 0, "bio": 0}
-
-def save_link_counter(data: dict):
-    with open(LINK_COUNTER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-def _reset_if_new_day(data: dict) -> dict:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if data.get("date") != today:
-        return {"date": today, "direct": 0, "bio": 0}
-    return data
-
-def decide_suffix_type() -> str:
-    data        = _reset_if_new_day(load_link_counter())
-    direct_done = data.get("direct", 0)
-    bio_done    = data.get("bio", 0)
-    # আজকের টার্গেট থেকে EXPECTED পোস্ট সংখ্যা
-    target, _   = get_daily_limit()
-    EXPECTED    = max(target, 1)
-    total_done  = direct_done + bio_done
-    posts_left  = max(EXPECTED - total_done, 1)
-
-    direct_remaining = MAX_DIRECT_LINKS - direct_done
-    bio_remaining    = MAX_BIO_LINKS    - bio_done
-
-    p_direct = direct_remaining / posts_left if direct_remaining > 0 else 0
-    p_bio    = bio_remaining    / posts_left if bio_remaining    > 0 else 0
-
-    r = random.random()
-    if r < p_direct:
-        result = "direct"
-    elif r < p_direct + p_bio:
-        result = "bio"
-    else:
-        result = "username"
-
-    print(f"  🎲 Suffix type → {result} (direct {direct_done}/{MAX_DIRECT_LINKS}, bio {bio_done}/{MAX_BIO_LINKS})")
-    return result
-
-def increment_link_counter(suffix_type: str):
-    data = _reset_if_new_day(load_link_counter())
-    if suffix_type == "direct":
-        data["direct"] = data.get("direct", 0) + 1
-    elif suffix_type == "bio":
-        data["bio"] = data.get("bio", 0) + 1
-    save_link_counter(data)
-    print(f"  📊 Link counter — direct: {data['direct']}/{MAX_DIRECT_LINKS}, bio: {data['bio']}/{MAX_BIO_LINKS}")
 
 # ═══════════════════════════════════════════════════════════
 # COMMUNITY COUNTER
@@ -489,6 +431,42 @@ def download_video_ytdlp(url: str) -> str | None:
         print(f"  ❌ yt-dlp error: {e}")
     return None
 
+def enhance_video_audio(video_path: str) -> str:
+    """
+    Run fix_audio pipeline (highpass → noise-reduce → normalize → compress/limit).
+    Overwrites the original file on success. Falls back to original on any error.
+    Capped at 120 s so a slow run never blocks the bot.
+    """
+    if not HAS_FIX_AUDIO:
+        return video_path
+
+    import concurrent.futures
+    base, ext = os.path.splitext(video_path)
+    out_path  = base + "_fixed" + ext
+
+    def _run():
+        _fix_audio_process(video_path, out_path, target_db=-6.0)
+
+    print("  🎵 Enhancing audio (noise-reduce + normalize)...")
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_run)
+            fut.result(timeout=120)          # 120 s ceiling; short vids: ~10-30 s
+        os.replace(out_path, video_path)     # swap in-place, same filename
+        print("  ✅ Audio enhanced.")
+    except concurrent.futures.TimeoutError:
+        print("  ⚠️ Audio enhancement timed out (>120 s) — using original.")
+        if os.path.exists(out_path):
+            try: os.remove(out_path)
+            except: pass
+    except Exception as e:
+        print(f"  ⚠️ Audio enhancement failed ({e}) — using original.")
+        if os.path.exists(out_path):
+            try: os.remove(out_path)
+            except: pass
+    return video_path
+
+
 def fetch_post_media(post: dict) -> tuple[str | None, bool]:
     url      = post.get("media_url")
     is_video = post.get("is_video", False)
@@ -504,6 +482,8 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
             path = download_video_ytdlp(url)
             if not path:
                 path = download_video_ytdlp(post["permalink"])
+        if path:
+            path = enhance_video_audio(path)
         return path, bool(path)
     ext  = re.search(r"\.(jpg|jpeg|png|gif|webp)", url, re.IGNORECASE)
     ext  = ext.group(0) if ext else ".jpg"
@@ -683,7 +663,7 @@ def rewrite_with_grok_or_local(context, original: str) -> str:
 # TWEET BUILDING (hook + suffix)
 # ═══════════════════════════════════════════════════════════
 def build_hook_tweet(post: dict, source_name: str, source_type: str,
-                     has_video: bool, context, suffix_type: str = "username") -> str:
+                     has_video: bool, context) -> str:
     original_title = post["title"].strip()
     ai_result = rewrite_with_grok_or_local(context, original_title)
 
@@ -703,14 +683,9 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
         title    = rewrite_title_locally(original_title)
         hashtags = "#NSFW #Reddit"
 
-    # লিংক শর্টেনার বাদ — সরাসরি LANDING_PAGE_URL
-    if suffix_type == "direct":
-        suffix = f"\n\nWant to see something darker? 👀\n{LANDING_PAGE_URL}"
-    elif suffix_type == "bio":
-        suffix = "\n\nWant to see something darker? 👀\nLink in bio ↑"
-    else:
-        prefix = "u/" if source_type == "user" else "r/"
-        suffix = f"\n\n{prefix}{source_name}"
+    # Always use username suffix (u/username or r/subreddit)
+    prefix = "u/" if source_type == "user" else "r/"
+    suffix = f"\n\n{prefix}{source_name}"
 
     hashtag_block = f"\n{hashtags}" if hashtags else ""
     tweet = title + hashtag_block + suffix
@@ -721,6 +696,184 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
         tweet = title + hashtag_block + suffix
 
     return tweet
+
+# ═══════════════════════════════════════════════════════════
+# PINNED TWEET — fetch once per session, comment on 50% of posts
+# ═══════════════════════════════════════════════════════════
+_PINNED_CACHE: dict = {"text": None, "media_path": None, "fetched": False}
+
+
+def get_own_username(page) -> str | None:
+    """Get the logged-in account's X username from the sidebar profile link."""
+    try:
+        link = page.query_selector('a[data-testid="AppTabBar_Profile_Link"]')
+        if link:
+            href = (link.get_attribute("href") or "").strip("/")
+            username = href.split("/")[-1]
+            if username:
+                print(f"👤 Own username: @{username}")
+                return username
+    except Exception as e:
+        print(f"  ⚠️ get_own_username error: {e}")
+    return None
+
+
+def fetch_pinned_tweet_content(page, own_username: str) -> dict:
+    """
+    Navigate to own profile, find the pinned tweet, extract its text and
+    download its video (if any). Result is cached for the whole session.
+    """
+    global _PINNED_CACHE
+    if _PINNED_CACHE["fetched"]:
+        return _PINNED_CACHE
+
+    print("\n📌 Fetching pinned tweet content...")
+    try:
+        page.goto(f"https://x.com/{own_username}", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(4000)
+
+        tweets = page.query_selector_all('article[data-testid="tweet"]')
+        pinned_tweet = None
+        for tweet in tweets[:5]:
+            try:
+                ctx = tweet.query_selector('[data-testid="socialContext"]')
+                if ctx and "pinned" in ctx.inner_text().lower():
+                    pinned_tweet = tweet
+                    break
+            except:
+                continue
+
+        if not pinned_tweet:
+            print("  ⚠️ No pinned tweet found on profile — comments will be skipped.")
+            _PINNED_CACHE["fetched"] = True
+            return _PINNED_CACHE
+
+        # Extract text
+        text_el = pinned_tweet.query_selector('div[data-testid="tweetText"]')
+        pin_text = text_el.inner_text().strip() if text_el else ""
+
+        # Find tweet URL (needed for yt-dlp video download)
+        pinned_url = None
+        for lel in pinned_tweet.query_selector_all('a[href*="/status/"]'):
+            href = lel.get_attribute("href") or ""
+            if "/status/" in href and not any(
+                href.endswith(s) for s in ("/analytics", "/retweets", "/likes")
+            ):
+                pinned_url = f"https://x.com{href}" if href.startswith("/") else href
+                break
+
+        # Download video if present
+        media_path = None
+        if pinned_tweet.query_selector('video') and pinned_url:
+            print(f"  🎬 Downloading pinned tweet video: {pinned_url}")
+            media_path = download_video_ytdlp(pinned_url)
+            if not media_path:
+                print("  ⚠️ Pinned video download failed — will comment text-only.")
+
+        _PINNED_CACHE["text"]       = pin_text
+        _PINNED_CACHE["media_path"] = media_path
+        _PINNED_CACHE["fetched"]    = True
+        print(f"  ✅ Pinned tweet cached. Text: {pin_text[:70] if pin_text else '(none)'!r} | Media: {media_path or 'None'}")
+
+    except Exception as e:
+        print(f"  ❌ fetch_pinned_tweet_content error: {e}")
+        _PINNED_CACHE["fetched"] = True
+
+    return _PINNED_CACHE
+
+
+def get_latest_tweet_url(page, own_username: str) -> str | None:
+    """Return the URL of the most recently posted (non-pinned) tweet."""
+    try:
+        page.goto(f"https://x.com/{own_username}", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(4000)
+        for tweet in page.query_selector_all('article[data-testid="tweet"]')[:6]:
+            # Skip pinned
+            try:
+                ctx = tweet.query_selector('[data-testid="socialContext"]')
+                if ctx and "pinned" in ctx.inner_text().lower():
+                    continue
+            except:
+                pass
+            for lel in tweet.query_selector_all('a[href*="/status/"]'):
+                href = lel.get_attribute("href") or ""
+                if "/status/" in href and not any(
+                    href.endswith(s) for s in ("/analytics", "/retweets", "/likes")
+                ):
+                    return f"https://x.com{href}" if href.startswith("/") else href
+    except Exception as e:
+        print(f"  ⚠️ get_latest_tweet_url error: {e}")
+    return None
+
+
+def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
+    """Reply to the most recently posted tweet with the pinned tweet content."""
+    if not pinned_data.get("text") and not pinned_data.get("media_path"):
+        print("  ⚠️ Pinned tweet has no content — skipping comment.")
+        return False
+    try:
+        tweet_url = get_latest_tweet_url(page, own_username)
+        if not tweet_url:
+            print("  ❌ Could not find latest tweet URL for comment.")
+            return False
+
+        print(f"  💬 Commenting on: {tweet_url}")
+        page.goto(tweet_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(4000)
+
+        reply_btns = page.query_selector_all('button[data-testid="reply"]')
+        if not reply_btns:
+            print("  ❌ Reply button not found.")
+            return False
+        reply_btns[0].click()
+        page.wait_for_timeout(2000)
+
+        textarea = page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=15000)
+        if not textarea:
+            print("  ❌ Reply textarea not found.")
+            return False
+
+        comment_text  = pinned_data.get("text", "")
+        comment_media = pinned_data.get("media_path")
+
+        if comment_text:
+            human_type(page, textarea, comment_text)
+            page.wait_for_timeout(1000)
+
+        if comment_media and os.path.exists(comment_media):
+            try:
+                attach_btn = page.query_selector('button[aria-label="Add photos or video"]')
+                if attach_btn:
+                    with page.expect_file_chooser(timeout=10000) as fc_info:
+                        attach_btn.click()
+                    fc_info.value.set_files(comment_media)
+                    is_vid = comment_media.lower().endswith(".mp4")
+                    if is_vid:
+                        page.wait_for_timeout(3000)
+                        try:
+                            page.wait_for_selector('div[data-testid="attachments"]', timeout=30000)
+                        except:
+                            pass
+                        page.wait_for_timeout(45000)
+                    else:
+                        page.wait_for_timeout(4000)
+                    print(f"  📎 Comment media attached: {os.path.basename(comment_media)}")
+            except Exception as e:
+                print(f"  ⚠️ Comment media attach error: {e}")
+
+        try:
+            btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
+        except:
+            btn = page.wait_for_selector('button[data-testid="tweetButton"]', timeout=8000)
+        btn.click()
+        page.wait_for_timeout(5000)
+        print("  ✅ Comment posted!")
+        return True
+
+    except Exception as e:
+        print(f"  ❌ comment_on_latest_post error: {e}")
+        return False
+
 
 # ═══════════════════════════════════════════════════════════
 # X POSTING HELPERS
@@ -802,7 +955,7 @@ def type_and_submit(page, text, media_paths):
     page.wait_for_timeout(random.randint(500, 1200))
     btn.click()
     page.wait_for_timeout(5000)
-    return True          # পোস্ট সফল হলে True রিটার্ন
+    return True
 
 def open_compose_and_post(page, text, media_paths):
     for method_num, method in enumerate(["keyboard", "sidenav", "direct"], 1):
@@ -874,7 +1027,7 @@ def post_to_community(page, community_url, text, media_paths):
 # ═══════════════════════════════════════════════════════════
 # MAIN REDDIT POST FUNCTION
 # ═══════════════════════════════════════════════════════════
-def perform_reddit_post(page, context, posted_cache):
+def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_data: dict):
     eligible_communities = get_eligible_communities()
     post_destination = "profile"
     chosen_community = None
@@ -952,12 +1105,9 @@ def perform_reddit_post(page, context, posted_cache):
     media_path, is_video = fetch_post_media(chosen_post)
     print(f"   Media: {media_path or 'None'} | Video: {is_video}")
 
-    suffix_type = decide_suffix_type()
-    increment_link_counter(suffix_type)
-
     print("🤖 Building tweet...")
     hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type,
-                                  is_video, context, suffix_type)
+                                  is_video, context)
     print(f"   Tweet: {hook_tweet}")
 
     media_list = [media_path] if media_path else []
@@ -976,6 +1126,14 @@ def perform_reddit_post(page, context, posted_cache):
     posted_cache = mark_as_posted(chosen_post["id"], posted_cache)
     limit_reached = increment_daily_counter()
     print("✅ Post successful!")
+
+    # 50% chance: comment on the just-posted tweet with pinned tweet content
+    if pinned_data.get("text") or pinned_data.get("media_path"):
+        if random.random() < 0.5:
+            print("\n💬 Triggering pinned-tweet comment (50% chance hit)...")
+            page.wait_for_timeout(random.randint(10000, 18000))
+            comment_on_latest_post(page, own_username, pinned_data)
+
     if limit_reached:
         print("🎯 Daily post limit reached.")
     if media_path and os.path.exists(media_path):
@@ -989,18 +1147,16 @@ def perform_reddit_post(page, context, posted_cache):
 # MAIN LOOP
 # ═══════════════════════════════════════════════════════════
 def human_delay(iteration, hour):
+    # ৬ ঘণ্টায় ৩-৪ পোস্টের উপযোগী দীর্ঘ বিরতি
     if 6 <= hour < 10:
-        base = random.randint(15, 25) * 60
+        base = random.randint(60, 100) * 60
     elif 10 <= hour < 16:
-        base = random.randint(10, 18) * 60
+        base = random.randint(70, 110) * 60
     elif 16 <= hour < 22:
-        base = random.randint(15, 25) * 60
+        base = random.randint(60, 100) * 60
     else:
-        base = random.randint(40, 90) * 60
-    if iteration > 40:
-        base = int(base * 1.6)
-    elif iteration > 25:
-        base = int(base * 1.3)
+        base = random.randint(80, 130) * 60
+    # ইটারেশন খুব কম, কোনো গুণক দরকার নেই
     return base
 
 def run_bot_loop():
@@ -1015,7 +1171,7 @@ def run_bot_loop():
         print("🎯 Today's post limit already reached. Exiting.")
         return
 
-    MAX_DURATION = 6 * 3600
+    MAX_DURATION = 6 * 3600   # GitHub Actions-এর সীমা
     start_time = time.time()
 
     with sync_playwright() as p:
@@ -1078,8 +1234,19 @@ def run_bot_loop():
         """)
 
         print(f"\n🤖 Reddit→X Bot started — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Get own username and cache pinned tweet content once per session
+        page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(4000)
+        own_username = get_own_username(page)
+        pinned_data: dict = {"text": None, "media_path": None, "fetched": False}
+        if own_username:
+            pinned_data = fetch_pinned_tweet_content(page, own_username)
+        else:
+            print("⚠️ Could not determine own username — pinned-tweet comments disabled.")
+
         iteration = 0
-        SIESTA_EVERY = random.randint(15, 20)
+        SIESTA_EVERY = random.randint(15, 20)   # এই বটে অত বার সিয়েস্তা আসবে না
 
         while True:
             target, current = get_daily_limit()
@@ -1107,7 +1274,7 @@ def run_bot_loop():
             print(f"\n🔄 Iteration {iteration} — {now.strftime('%H:%M:%S')}", flush=True)
 
             posted_cache = load_posted_cache()
-            success = perform_reddit_post(page, context, posted_cache)
+            success = perform_reddit_post(page, context, posted_cache, own_username or '', pinned_data)
             if not success:
                 print("⚠️ Post failed, continuing after delay.", flush=True)
 
