@@ -301,6 +301,9 @@ def _parse_reddit_children(children: list) -> list[dict]:
                     media_url = src
         if not media_url:
             continue
+        author = (p.get("author") or "").strip()
+        if author.lower() in ("", "[deleted]", "[removed]"):
+            author = ""
         posts.append({
             "id":          post_id,
             "title":       title,
@@ -310,6 +313,7 @@ def _parse_reddit_children(children: list) -> list[dict]:
             "media_url":   media_url,
             "is_video":    is_video,
             "subreddit":   p.get("subreddit", ""),
+            "author":      author,
         })
     return posts
 
@@ -430,6 +434,23 @@ def download_video_ytdlp(url: str) -> str | None:
     except Exception as e:
         print(f"  ❌ yt-dlp error: {e}")
     return None
+
+def has_audio_stream(video_path: str) -> bool:
+    """ffprobe দিয়ে ভিডিওতে audio stream আছে কিনা চেক করে।"""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return result.stdout.strip() == "audio"
+    except Exception as e:
+        print(f"  ⚠️ ffprobe check error: {e}")
+        return True  # চেক না হলে assume আছে, safe fallback
+
 
 def enhance_video_audio(video_path: str) -> str:
     """
@@ -683,9 +704,15 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
         title    = rewrite_title_locally(original_title)
         hashtags = "#NSFW #Reddit"
 
-    # Always use username suffix (u/username or r/subreddit)
-    prefix = "u/" if source_type == "user" else "r/"
-    suffix = f"\n\n{prefix}{source_name}"
+    # Creator posts → u/creator. Subreddit posts → u/author (fallback: r/subreddit)
+    if source_type == "user":
+        suffix = f"\n\nu/{source_name}"
+    else:
+        author = post.get("author", "")
+        if author:
+            suffix = f"\n\nu/{author}"
+        else:
+            suffix = f"\n\nr/{source_name}"
 
     hashtag_block = f"\n{hashtags}" if hashtags else ""
     tweet = title + hashtag_block + suffix
@@ -1027,7 +1054,7 @@ def post_to_community(page, community_url, text, media_paths):
 # ═══════════════════════════════════════════════════════════
 # MAIN REDDIT POST FUNCTION
 # ═══════════════════════════════════════════════════════════
-def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_data: dict):
+def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_data: dict, silent_skip_ids: set = None):
     eligible_communities = get_eligible_communities()
     post_destination = "profile"
     chosen_community = None
@@ -1073,7 +1100,8 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
         time.sleep(random.uniform(1.5, 3.0))
         if not posts:
             continue
-        unposted = [p for p in posts if not is_recently_posted(p["id"], posted_cache)]
+        _skip = silent_skip_ids or set()
+        unposted = [p for p in posts if not is_recently_posted(p["id"], posted_cache) and p["id"] not in _skip]
         if not unposted:
             continue
         videos = [p for p in unposted if p.get("is_video")]
@@ -1104,6 +1132,18 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
     print("📥 Downloading media...")
     media_path, is_video = fetch_post_media(chosen_post)
     print(f"   Media: {media_path or 'None'} | Video: {is_video}")
+
+    # Silent video চেক — audio stream না থাকলে skip করো
+    if is_video and media_path:
+        if not has_audio_stream(media_path):
+            print("  🔇 Silent video detected — skipping this post.")
+            try:
+                os.remove(media_path)
+            except:
+                pass
+            if silent_skip_ids is not None:
+                silent_skip_ids.add(chosen_post["id"])
+            return False
 
     print("🤖 Building tweet...")
     hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type,
@@ -1246,7 +1286,8 @@ def run_bot_loop():
             print("⚠️ Could not determine own username — pinned-tweet comments disabled.")
 
         iteration = 0
-        SIESTA_EVERY = random.randint(15, 20)   # এই বটে অত বার সিয়েস্তা আসবে না
+        SIESTA_EVERY = random.randint(15, 20)
+        silent_skip_ids: set = set()  # session-এ silent বলে চেনা post_id গুলো   # এই বটে অত বার সিয়েস্তা আসবে না
 
         while True:
             target, current = get_daily_limit()
@@ -1274,7 +1315,7 @@ def run_bot_loop():
             print(f"\n🔄 Iteration {iteration} — {now.strftime('%H:%M:%S')}", flush=True)
 
             posted_cache = load_posted_cache()
-            success = perform_reddit_post(page, context, posted_cache, own_username or '', pinned_data)
+            success = perform_reddit_post(page, context, posted_cache, own_username or '', pinned_data, silent_skip_ids)
             if not success:
                 print("⚠️ Post failed, continuing after delay.", flush=True)
 
