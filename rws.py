@@ -416,6 +416,7 @@ def download_video_redgifs(redgifs_url: str) -> str | None:
     return None
 
 def download_video_ytdlp(url: str) -> str | None:
+    """Redgifs/অন্যান্য ডাউনলোডের জন্য (রেফারার হেডার সহ)"""
     out = os.path.join(MEDIA_DIR, f"video_{int(time.time())}.mp4")
     cmd = [
         "yt-dlp", "--no-playlist",
@@ -439,6 +440,34 @@ def download_video_ytdlp(url: str) -> str | None:
             return out
     except Exception as e:
         print(f"  ❌ yt-dlp error: {e}")
+    return None
+
+def download_twitter_video_ytdlp(url: str) -> str | None:
+    """শুধুমাত্র X (টুইটার) ভিডিওর জন্য — নিউজ বটের মতো ক্লিন, কোনো রেফারার হেডার ছাড়া"""
+    out = os.path.join(MEDIA_DIR, f"pinned_video_{int(time.time())}.mp4")
+    cmd = [
+        "yt-dlp", "--no-playlist",
+        "--format", "mp4/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "--output", out,
+        "--quiet", "--no-warnings",
+        "--socket-timeout", "60",
+        url,
+    ]
+    try:
+        res = subprocess.run(cmd, timeout=180, capture_output=True, text=True)
+        if res.returncode == 0 and os.path.exists(out):
+            size = os.path.getsize(out)
+            if size > 50 * 1024 * 1024:
+                print("  ⚠️  Pinned video >50MB — skip")
+                os.remove(out)
+                return None
+            print(f"  📥 Pinned video (Twitter): {size//1024} KB")
+            return out
+        else:
+            print(f"  ❌ yt-dlp (Twitter) failed: {res.stderr.strip()[:200]}")
+    except Exception as e:
+        print(f"  ❌ yt-dlp (Twitter) exception: {e}")
     return None
 
 def has_audio_stream(video_path: str) -> bool:
@@ -751,7 +780,7 @@ _PINNED_CACHE: dict = {"text": None, "media_path": None, "is_video": False, "fet
 def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> dict:
     """
     PINNED_TWEET_URL env থেকে URL নিয়ে text + video দুটোই নেয়।
-    ভিডিও থাকলে yt-dlp দিয়ে download করে — audio enhance করে না (user নিজে edit করেছে)।
+    ভিডিও থাকলে download_twitter_video_ytdlp দিয়ে download করে — audio enhance করে না।
     """
     global _PINNED_CACHE
     if _PINNED_CACHE["fetched"]:
@@ -783,8 +812,8 @@ def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> di
 
         media_path = None
         if has_video:
-            print("  🎬 Video detected — downloading (no audio enhance)...")
-            media_path = download_video_ytdlp(PINNED_TWEET_URL)
+            print("  🎬 Video detected — downloading via Twitter-optimized function...")
+            media_path = download_twitter_video_ytdlp(PINNED_TWEET_URL)
             if media_path:
                 print(f"  ✅ Pinned video ready: {media_path}")
             else:
