@@ -384,7 +384,12 @@ def download_video_redgifs(redgifs_url: str) -> str | None:
             headers={"User-Agent": "Mozilla/5.0"}, timeout=20
         )
         token = token_r.json().get("token", "")
-        headers = {"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}"}
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Authorization": f"Bearer {token}",
+            "Referer": "https://www.redgifs.com/",
+            "Origin": "https://www.redgifs.com",
+        }
         info_r = requests.get(
             f"https://api.redgifs.com/v2/gifs/{gif_id}",
             headers=headers, timeout=20
@@ -414,11 +419,12 @@ def download_video_ytdlp(url: str) -> str | None:
     out = os.path.join(MEDIA_DIR, f"video_{int(time.time())}.mp4")
     cmd = [
         "yt-dlp", "--no-playlist",
-        "--format", "mp4/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--output", out,
         "--quiet", "--no-warnings",
         "--socket-timeout", "60",
+        "--add-header", "Referer:https://www.redgifs.com/",
         url,
     ]
     try:
@@ -499,6 +505,18 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
             path = download_video_redgifs(url)
             if not path:
                 path = download_video_redgifs(post["permalink"])
+            # direct download silent হলে yt-dlp দিয়ে retry
+            if path and not has_audio_stream(path):
+                print("  🔇 Redgifs direct download silent — retrying with yt-dlp...")
+                try:
+                    os.remove(path)
+                except:
+                    pass
+                path = download_video_ytdlp(post.get("permalink") or url)
+                if path:
+                    print(f"  ✅ yt-dlp fallback success: {path}")
+                else:
+                    print("  ❌ yt-dlp fallback also failed — post will be skipped.")
         else:
             path = download_video_ytdlp(url)
             if not path:
@@ -733,7 +751,7 @@ _PINNED_CACHE: dict = {"text": None, "media_path": None, "is_video": False, "fet
 def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> dict:
     """
     PINNED_TWEET_URL env থেকে URL নিয়ে text + video দুটোই নেয়।
-    ভিডিও থাকলে yt-dlp দিয়ে download করে media_path-এ রাখে।
+    ভিডিও থাকলে yt-dlp দিয়ে download করে — audio enhance করে না (user নিজে edit করেছে)।
     """
     global _PINNED_CACHE
     if _PINNED_CACHE["fetched"]:
@@ -752,8 +770,8 @@ def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> di
         # ── Text ──────────────────────────────────────────────
         text_el  = page.query_selector('div[data-testid="tweetText"]')
         pin_text = text_el.inner_text().strip() if text_el else ""
-        pin_text = re.sub(r'https?://\n+', '', pin_text)   # broken URL fix
-        pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)     # extra blank lines
+        pin_text = re.sub(r'https?://\n+', '', pin_text)
+        pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)
         _PINNED_CACHE["text"] = pin_text
         print(f"  ✅ Pinned text: {pin_text[:70]!r}")
 
@@ -765,15 +783,14 @@ def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> di
 
         media_path = None
         if has_video:
-            print("  🎬 Video detected on pinned tweet — downloading with yt-dlp...")
+            print("  🎬 Video detected — downloading (no audio enhance)...")
             media_path = download_video_ytdlp(PINNED_TWEET_URL)
             if media_path:
-                media_path = enhance_video_audio(media_path)
                 print(f"  ✅ Pinned video ready: {media_path}")
             else:
-                print("  ⚠️ yt-dlp could not download pinned tweet video — text-only comment.")
+                print("  ⚠️ Could not download pinned tweet video — text-only comment.")
         else:
-            print("  ℹ️ No video found on pinned tweet — text-only comment.")
+            print("  ℹ️ No video on pinned tweet — text-only comment.")
 
         _PINNED_CACHE["media_path"] = media_path
         _PINNED_CACHE["is_video"]   = bool(media_path)
@@ -855,7 +872,7 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
         human_type(page, textarea, pinned_data["text"])
         page.wait_for_timeout(1000)
 
-        # ── Video attach (pinned tweet-এ video থাকলে) ────────
+        # ── Video attach ──────────────────────────────────────
         media_path = pinned_data.get("media_path")
         if media_path and os.path.exists(media_path):
             print(f"  📎 Attaching pinned video: {os.path.basename(media_path)}")
@@ -872,18 +889,18 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
                         print("  ✅ Attachment container found.")
                     except:
                         print("  ⚠️ Attachment container not visible, continuing...")
-                    page.wait_for_timeout(45000)   # X-এর video processing শেষের জন্য অপেক্ষা
+                    page.wait_for_timeout(45000)
                     try:
                         page.wait_for_selector('div[data-testid="attachments"] video', timeout=15000)
                         print("  ✅ Video preview confirmed.")
                     except:
                         print("  ⚠️ Video preview not confirmed, posting anyway.")
                 else:
-                    print("  ⚠️ Attach button not found in reply dialog — text-only comment.")
+                    print("  ⚠️ Attach button not found — text-only comment.")
             except Exception as e:
-                print(f"  ⚠️ Media attach error in comment: {e} — continuing with text only.")
+                print(f"  ⚠️ Media attach error: {e} — continuing text-only.")
         elif media_path:
-            print(f"  ⚠️ Pinned video file missing on disk ({media_path}) — text-only comment.")
+            print(f"  ⚠️ Pinned video missing on disk — text-only comment.")
 
         try:
             btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
