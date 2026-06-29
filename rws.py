@@ -26,7 +26,7 @@ def _env_list(key, default=""):
 TARGET_CREATORS   = _env_list("TARGET_CREATORS")
 TARGET_SUBREDDITS = _env_list("TARGET_SUBREDDITS")
 
-LANDING_PAGE_URL = "https://redditwithsound.pages.dev/"
+PINNED_TWEET_URL = os.environ.get("PINNED_TWEET_URL", "").strip()
 
 MAX_COMMUNITY_POSTS_PER_DAY = 2
 
@@ -435,65 +435,6 @@ def download_video_ytdlp(url: str) -> str | None:
         print(f"  ❌ yt-dlp error: {e}")
     return None
 
-def download_video_ytdlp_with_cookies(url: str, session_data: dict) -> str | None:
-    """
-    yt-dlp দিয়ে X video download করে, SESSION_JSON cookies ব্যবহার করে।
-    Sensitive content যেগুলো login ছাড়া দেখা যায় না, সেগুলোর জন্য।
-    """
-    import tempfile
-
-    out = os.path.join(MEDIA_DIR, f"video_{int(time.time())}.mp4")
-
-    # Netscape format-এ cookies temp file-এ লেখো
-    cookies_lines = ["# Netscape HTTP Cookie File"]
-    for c in session_data.get("cookies", []):
-        name    = c.get("name", "")
-        value   = c.get("value", "")
-        domain  = c.get("domain", ".x.com")
-        path    = c.get("path", "/")
-        secure  = "TRUE" if c.get("secure", False) else "FALSE"
-        expires = str(int(c.get("expires", 0)) if c.get("expires") else 0)
-        flag    = "TRUE" if domain.startswith(".") else "FALSE"
-        clean_val = value.replace(chr(9), " ").replace(chr(10), "").replace(chr(13), "")
-        cookies_lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{clean_val}")
-
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                         delete=False, encoding="utf-8") as tmp:
-            tmp.write("\n".join(cookies_lines))
-            cookie_file = tmp.name
-
-        cmd = [
-            "yt-dlp", "--no-playlist",
-            "--format", "mp4/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "--output", out,
-            "--quiet", "--no-warnings",
-            "--socket-timeout", "60",
-            "--cookies", cookie_file,
-            url,
-        ]
-        res = subprocess.run(cmd, timeout=180, capture_output=True, text=True)
-        if res.returncode == 0 and os.path.exists(out):
-            size = os.path.getsize(out)
-            if size > 50 * 1024 * 1024:
-                print("  ⚠️ Pinned video >50MB — skip")
-                os.remove(out)
-                return None
-            print(f"  📥 Pinned video: {size//1024} KB")
-            return out
-        else:
-            print(f"  ❌ yt-dlp (cookies) error: {res.stderr.strip()[:200]}")
-    except Exception as e:
-        print(f"  ❌ yt-dlp (cookies) exception: {e}")
-    finally:
-        try:
-            os.remove(cookie_file)
-        except:
-            pass
-    return None
-
-
 def has_audio_stream(video_path: str) -> bool:
     """ffprobe দিয়ে ভিডিওতে audio stream আছে কিনা চেক করে।"""
     try:
@@ -786,7 +727,45 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
 # ═══════════════════════════════════════════════════════════
 # PINNED TWEET — fetch once per session, comment on 50% of posts
 # ═══════════════════════════════════════════════════════════
-_PINNED_CACHE: dict = {"text": None, "media_path": None, "fetched": False}
+_PINNED_CACHE: dict = {"text": None, "fetched": False}
+
+
+def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> dict:
+    """
+    PINNED_TWEET_URL env থেকে URL নিয়ে শুধু text extract করে।
+    Media download নেই — simple and clean।
+    """
+    global _PINNED_CACHE
+    if _PINNED_CACHE["fetched"]:
+        return _PINNED_CACHE
+
+    if not PINNED_TWEET_URL:
+        print("⚠️ PINNED_TWEET_URL not set — comments will be skipped.")
+        _PINNED_CACHE["fetched"] = True
+        return _PINNED_CACHE
+
+    print(f"\n📌 Fetching pinned tweet text from: {PINNED_TWEET_URL}")
+    try:
+        page.goto(PINNED_TWEET_URL, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)
+
+        text_el = page.query_selector('div[data-testid="tweetText"]')
+        pin_text = text_el.inner_text().strip() if text_el else ""
+
+        # X URL-কে দুটো span-এ render করে: "http://" + newline + "domain"
+        # inner_text() দিয়ে নিলে ভেঙে যায় — এটা fix করো
+        pin_text = re.sub(r'https?://\n+', '', pin_text)  # broken http:// সরাও
+        pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)    # extra blank lines কমাও
+
+        _PINNED_CACHE["text"]    = pin_text
+        _PINNED_CACHE["fetched"] = True
+        print(f"  ✅ Pinned text cached: {pin_text[:70]!r}")
+
+    except Exception as e:
+        print(f"  ❌ fetch_pinned_tweet_content error: {e}")
+        _PINNED_CACHE["fetched"] = True
+
+    return _PINNED_CACHE
 
 
 def get_own_username(page) -> str | None:
@@ -802,71 +781,6 @@ def get_own_username(page) -> str | None:
     except Exception as e:
         print(f"  ⚠️ get_own_username error: {e}")
     return None
-
-
-def fetch_pinned_tweet_content(page, own_username: str) -> dict:
-    """
-    Navigate to own profile, find the pinned tweet, extract its text and
-    download its video (if any). Result is cached for the whole session.
-    """
-    global _PINNED_CACHE
-    if _PINNED_CACHE["fetched"]:
-        return _PINNED_CACHE
-
-    print("\n📌 Fetching pinned tweet content...")
-    try:
-        page.goto(f"https://x.com/{own_username}", wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(4000)
-
-        tweets = page.query_selector_all('article[data-testid="tweet"]')
-        pinned_tweet = None
-        for tweet in tweets[:5]:
-            try:
-                ctx = tweet.query_selector('[data-testid="socialContext"]')
-                if ctx and "pinned" in ctx.inner_text().lower():
-                    pinned_tweet = tweet
-                    break
-            except:
-                continue
-
-        if not pinned_tweet:
-            print("  ⚠️ No pinned tweet found on profile — comments will be skipped.")
-            _PINNED_CACHE["fetched"] = True
-            return _PINNED_CACHE
-
-        # Extract text
-        text_el = pinned_tweet.query_selector('div[data-testid="tweetText"]')
-        pin_text = text_el.inner_text().strip() if text_el else ""
-
-        # Find tweet URL (needed for yt-dlp video download)
-        pinned_url = None
-        for lel in pinned_tweet.query_selector_all('a[href*="/status/"]'):
-            href = lel.get_attribute("href") or ""
-            if "/status/" in href and not any(
-                href.endswith(s) for s in ("/analytics", "/retweets", "/likes")
-            ):
-                pinned_url = f"https://x.com{href}" if href.startswith("/") else href
-                break
-
-        # Download video if present — cookies দিয়ে sensitive content handle করো
-        media_path = None
-        if pinned_tweet.query_selector('video') and pinned_url:
-            print(f"  🎬 Downloading pinned tweet video: {pinned_url}")
-            session_data = load_session() or {}
-            media_path = download_video_ytdlp_with_cookies(pinned_url, session_data)
-            if not media_path:
-                print("  ⚠️ Pinned video download failed — will comment text-only.")
-
-        _PINNED_CACHE["text"]       = pin_text
-        _PINNED_CACHE["media_path"] = media_path
-        _PINNED_CACHE["fetched"]    = True
-        print(f"  ✅ Pinned tweet cached. Text: {pin_text[:70] if pin_text else '(none)'!r} | Media: {media_path or 'None'}")
-
-    except Exception as e:
-        print(f"  ❌ fetch_pinned_tweet_content error: {e}")
-        _PINNED_CACHE["fetched"] = True
-
-    return _PINNED_CACHE
 
 
 def get_latest_tweet_url(page, own_username: str) -> str | None:
@@ -894,9 +808,9 @@ def get_latest_tweet_url(page, own_username: str) -> str | None:
 
 
 def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
-    """Reply to the most recently posted tweet with the pinned tweet content."""
-    if not pinned_data.get("text") and not pinned_data.get("media_path"):
-        print("  ⚠️ Pinned tweet has no content — skipping comment.")
+    """Reply to the most recently posted tweet with pinned tweet text."""
+    if not pinned_data.get("text"):
+        print("  ⚠️ Pinned tweet has no text — skipping comment.")
         return False
     try:
         tweet_url = get_latest_tweet_url(page, own_username)
@@ -920,33 +834,8 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
             print("  ❌ Reply textarea not found.")
             return False
 
-        comment_text  = pinned_data.get("text", "")
-        comment_media = pinned_data.get("media_path")
-
-        if comment_text:
-            human_type(page, textarea, comment_text)
-            page.wait_for_timeout(1000)
-
-        if comment_media and os.path.exists(comment_media):
-            try:
-                attach_btn = page.query_selector('button[aria-label="Add photos or video"]')
-                if attach_btn:
-                    with page.expect_file_chooser(timeout=10000) as fc_info:
-                        attach_btn.click()
-                    fc_info.value.set_files(comment_media)
-                    is_vid = comment_media.lower().endswith(".mp4")
-                    if is_vid:
-                        page.wait_for_timeout(3000)
-                        try:
-                            page.wait_for_selector('div[data-testid="attachments"]', timeout=30000)
-                        except:
-                            pass
-                        page.wait_for_timeout(45000)
-                    else:
-                        page.wait_for_timeout(4000)
-                    print(f"  📎 Comment media attached: {os.path.basename(comment_media)}")
-            except Exception as e:
-                print(f"  ⚠️ Comment media attach error: {e}")
+        human_type(page, textarea, pinned_data["text"])
+        page.wait_for_timeout(1000)
 
         try:
             btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
@@ -1228,7 +1117,7 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
     print("✅ Post successful!")
 
     # 50% chance: comment on the just-posted tweet with pinned tweet content
-    if pinned_data.get("text") or pinned_data.get("media_path"):
+    if pinned_data.get("text"):
         if random.random() < 0.5:
             print("\n💬 Triggering pinned-tweet comment (50% chance hit)...")
             page.wait_for_timeout(random.randint(10000, 18000))
@@ -1299,7 +1188,8 @@ def run_bot_loop():
         )
         page = context.new_page()
 
-        page.add_init_script("""
+        # context-এ inject করো — এই context থেকে খোলা সব page-এ automatically apply হবে
+        context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
             window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
@@ -1339,7 +1229,7 @@ def run_bot_loop():
         page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(4000)
         own_username = get_own_username(page)
-        pinned_data: dict = {"text": None, "media_path": None, "fetched": False}
+        pinned_data: dict = {"text": None, "fetched": False}
         if own_username:
             pinned_data = fetch_pinned_tweet_content(page, own_username)
         else:
