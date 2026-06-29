@@ -454,7 +454,8 @@ def download_video_ytdlp_with_cookies(url: str, session_data: dict) -> str | Non
         secure  = "TRUE" if c.get("secure", False) else "FALSE"
         expires = str(int(c.get("expires", 0)) if c.get("expires") else 0)
         flag    = "TRUE" if domain.startswith(".") else "FALSE"
-        cookies_lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value.replace(chr(9), chr(32)).replace(chr(10), "").replace(chr(13), "")}")
+        clean_val = value.replace(chr(9), " ").replace(chr(10), "").replace(chr(13), "")
+        cookies_lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{clean_val}")
 
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
