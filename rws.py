@@ -491,15 +491,13 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
     if is_video:
         if "redgifs.com" in url or "redgifs.com" in post.get("permalink", ""):
             path = download_video_redgifs(url)
-            if not path:
-                path = download_video_redgifs(post["permalink"])
             if path and not has_audio_stream(path):
                 print("  🔇 Redgifs direct download silent — retrying with yt-dlp...")
                 try:
                     os.remove(path)
                 except:
                     pass
-                path = download_video_ytdlp(post.get("permalink") or url)
+                path = download_video_ytdlp(url)
                 if path:
                     print(f"  ✅ yt-dlp fallback success: {path}")
                 else:
