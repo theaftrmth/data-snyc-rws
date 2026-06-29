@@ -727,13 +727,13 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
 # ═══════════════════════════════════════════════════════════
 # PINNED TWEET — fetch once per session, comment on 50% of posts
 # ═══════════════════════════════════════════════════════════
-_PINNED_CACHE: dict = {"text": None, "fetched": False}
+_PINNED_CACHE: dict = {"text": None, "media_path": None, "is_video": False, "fetched": False}
 
 
 def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> dict:
     """
-    PINNED_TWEET_URL env থেকে URL নিয়ে শুধু text extract করে।
-    Media download নেই — simple and clean।
+    PINNED_TWEET_URL env থেকে URL নিয়ে text + video দুটোই নেয়।
+    ভিডিও থাকলে yt-dlp দিয়ে download করে media_path-এ রাখে।
     """
     global _PINNED_CACHE
     if _PINNED_CACHE["fetched"]:
@@ -744,22 +744,40 @@ def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> di
         _PINNED_CACHE["fetched"] = True
         return _PINNED_CACHE
 
-    print(f"\n📌 Fetching pinned tweet text from: {PINNED_TWEET_URL}")
+    print(f"\n📌 Fetching pinned tweet from: {PINNED_TWEET_URL}")
     try:
         page.goto(PINNED_TWEET_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
-        text_el = page.query_selector('div[data-testid="tweetText"]')
+        # ── Text ──────────────────────────────────────────────
+        text_el  = page.query_selector('div[data-testid="tweetText"]')
         pin_text = text_el.inner_text().strip() if text_el else ""
+        pin_text = re.sub(r'https?://\n+', '', pin_text)   # broken URL fix
+        pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)     # extra blank lines
+        _PINNED_CACHE["text"] = pin_text
+        print(f"  ✅ Pinned text: {pin_text[:70]!r}")
 
-        # X URL-কে দুটো span-এ render করে: "http://" + newline + "domain"
-        # inner_text() দিয়ে নিলে ভেঙে যায় — এটা fix করো
-        pin_text = re.sub(r'https?://\n+', '', pin_text)  # broken http:// সরাও
-        pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)    # extra blank lines কমাও
+        # ── Video detection ───────────────────────────────────
+        has_video = bool(
+            page.query_selector('div[data-testid="videoPlayer"]') or
+            page.query_selector('video')
+        )
 
-        _PINNED_CACHE["text"]    = pin_text
-        _PINNED_CACHE["fetched"] = True
-        print(f"  ✅ Pinned text cached: {pin_text[:70]!r}")
+        media_path = None
+        if has_video:
+            print("  🎬 Video detected on pinned tweet — downloading with yt-dlp...")
+            media_path = download_video_ytdlp(PINNED_TWEET_URL)
+            if media_path:
+                media_path = enhance_video_audio(media_path)
+                print(f"  ✅ Pinned video ready: {media_path}")
+            else:
+                print("  ⚠️ yt-dlp could not download pinned tweet video — text-only comment.")
+        else:
+            print("  ℹ️ No video found on pinned tweet — text-only comment.")
+
+        _PINNED_CACHE["media_path"] = media_path
+        _PINNED_CACHE["is_video"]   = bool(media_path)
+        _PINNED_CACHE["fetched"]    = True
 
     except Exception as e:
         print(f"  ❌ fetch_pinned_tweet_content error: {e}")
@@ -808,7 +826,7 @@ def get_latest_tweet_url(page, own_username: str) -> str | None:
 
 
 def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
-    """Reply to the most recently posted tweet with pinned tweet text."""
+    """Reply to the most recently posted tweet with pinned tweet text + video (if any)."""
     if not pinned_data.get("text"):
         print("  ⚠️ Pinned tweet has no text — skipping comment.")
         return False
@@ -836,6 +854,36 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
 
         human_type(page, textarea, pinned_data["text"])
         page.wait_for_timeout(1000)
+
+        # ── Video attach (pinned tweet-এ video থাকলে) ────────
+        media_path = pinned_data.get("media_path")
+        if media_path and os.path.exists(media_path):
+            print(f"  📎 Attaching pinned video: {os.path.basename(media_path)}")
+            try:
+                attach_btn = page.query_selector('button[aria-label="Add photos or video"]')
+                if attach_btn:
+                    with page.expect_file_chooser(timeout=10000) as fc_info:
+                        attach_btn.click()
+                    fc_info.value.set_files(media_path)
+                    print("  🎞 Video queued in reply...")
+                    page.wait_for_timeout(3000)
+                    try:
+                        page.wait_for_selector('div[data-testid="attachments"]', timeout=30000)
+                        print("  ✅ Attachment container found.")
+                    except:
+                        print("  ⚠️ Attachment container not visible, continuing...")
+                    page.wait_for_timeout(45000)   # X-এর video processing শেষের জন্য অপেক্ষা
+                    try:
+                        page.wait_for_selector('div[data-testid="attachments"] video', timeout=15000)
+                        print("  ✅ Video preview confirmed.")
+                    except:
+                        print("  ⚠️ Video preview not confirmed, posting anyway.")
+                else:
+                    print("  ⚠️ Attach button not found in reply dialog — text-only comment.")
+            except Exception as e:
+                print(f"  ⚠️ Media attach error in comment: {e} — continuing with text only.")
+        elif media_path:
+            print(f"  ⚠️ Pinned video file missing on disk ({media_path}) — text-only comment.")
 
         try:
             btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
