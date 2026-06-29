@@ -435,6 +435,64 @@ def download_video_ytdlp(url: str) -> str | None:
         print(f"  ❌ yt-dlp error: {e}")
     return None
 
+def download_video_ytdlp_with_cookies(url: str, session_data: dict) -> str | None:
+    """
+    yt-dlp দিয়ে X video download করে, SESSION_JSON cookies ব্যবহার করে।
+    Sensitive content যেগুলো login ছাড়া দেখা যায় না, সেগুলোর জন্য।
+    """
+    import tempfile
+
+    out = os.path.join(MEDIA_DIR, f"video_{int(time.time())}.mp4")
+
+    # Netscape format-এ cookies temp file-এ লেখো
+    cookies_lines = ["# Netscape HTTP Cookie File"]
+    for c in session_data.get("cookies", []):
+        name    = c.get("name", "")
+        value   = c.get("value", "")
+        domain  = c.get("domain", ".x.com")
+        path    = c.get("path", "/")
+        secure  = "TRUE" if c.get("secure", False) else "FALSE"
+        expires = str(int(c.get("expires", 0)) if c.get("expires") else 0)
+        flag    = "TRUE" if domain.startswith(".") else "FALSE"
+        cookies_lines.append(f"{domain}	{flag}	{path}	TRUE	{expires}	{secure}	{name}	{value}")
+
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                         delete=False, encoding="utf-8") as tmp:
+            tmp.write("\n".join(cookies_lines))
+            cookie_file = tmp.name
+
+        cmd = [
+            "yt-dlp", "--no-playlist",
+            "--format", "mp4/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "--merge-output-format", "mp4",
+            "--output", out,
+            "--quiet", "--no-warnings",
+            "--socket-timeout", "60",
+            "--cookies", cookie_file,
+            url,
+        ]
+        res = subprocess.run(cmd, timeout=180, capture_output=True, text=True)
+        if res.returncode == 0 and os.path.exists(out):
+            size = os.path.getsize(out)
+            if size > 50 * 1024 * 1024:
+                print("  ⚠️ Pinned video >50MB — skip")
+                os.remove(out)
+                return None
+            print(f"  📥 Pinned video: {size//1024} KB")
+            return out
+        else:
+            print(f"  ❌ yt-dlp (cookies) error: {res.stderr.strip()[:200]}")
+    except Exception as e:
+        print(f"  ❌ yt-dlp (cookies) exception: {e}")
+    finally:
+        try:
+            os.remove(cookie_file)
+        except:
+            pass
+    return None
+
+
 def has_audio_stream(video_path: str) -> bool:
     """ffprobe দিয়ে ভিডিওতে audio stream আছে কিনা চেক করে।"""
     try:
@@ -789,11 +847,12 @@ def fetch_pinned_tweet_content(page, own_username: str) -> dict:
                 pinned_url = f"https://x.com{href}" if href.startswith("/") else href
                 break
 
-        # Download video if present
+        # Download video if present — cookies দিয়ে sensitive content handle করো
         media_path = None
         if pinned_tweet.query_selector('video') and pinned_url:
             print(f"  🎬 Downloading pinned tweet video: {pinned_url}")
-            media_path = download_video_ytdlp(pinned_url)
+            session_data = load_session() or {}
+            media_path = download_video_ytdlp_with_cookies(pinned_url, session_data)
             if not media_path:
                 print("  ⚠️ Pinned video download failed — will comment text-only.")
 
