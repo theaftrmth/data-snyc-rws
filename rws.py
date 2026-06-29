@@ -172,7 +172,7 @@ def mark_as_posted(post_id: str, cache: dict) -> dict:
     return cache
 
 # ═══════════════════════════════════════════════════════════
-# DAILY POST LIMIT (এখন ১৪–১৬ পোস্ট/দিন)
+# DAILY POST LIMIT
 # ═══════════════════════════════════════════════════════════
 def get_daily_limit():
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -184,7 +184,7 @@ def get_daily_limit():
                 return data["target"], data["count"]
         except:
             pass
-    target = random.randint(14, 16)          # প্রতিদিন ১৪-১৬টি পোস্ট
+    target = random.randint(14, 16)
     data = {"date": today_str, "target": target, "count": 0}
     with open(DAILY_LIMIT_FILE, "w") as f:
         json.dump(data, f)
@@ -416,7 +416,6 @@ def download_video_redgifs(redgifs_url: str) -> str | None:
     return None
 
 def download_video_ytdlp(url: str) -> str | None:
-    """সাধারণ yt-dlp ডাউনলোড — কোনো বাড়তি হেডার নেই, সব সোর্সের জন্য উপযুক্ত।"""
     out = os.path.join(MEDIA_DIR, f"video_{int(time.time())}.mp4")
     cmd = [
         "yt-dlp", "--no-playlist",
@@ -442,7 +441,6 @@ def download_video_ytdlp(url: str) -> str | None:
     return None
 
 def has_audio_stream(video_path: str) -> bool:
-    """ffprobe দিয়ে ভিডিওতে audio stream আছে কিনা চেক করে।"""
     try:
         cmd = [
             "ffprobe", "-v", "error",
@@ -455,31 +453,22 @@ def has_audio_stream(video_path: str) -> bool:
         return result.stdout.strip() == "audio"
     except Exception as e:
         print(f"  ⚠️ ffprobe check error: {e}")
-        return True  # চেক না হলে assume আছে, safe fallback
-
+        return True
 
 def enhance_video_audio(video_path: str) -> str:
-    """
-    Run fix_audio pipeline (highpass → noise-reduce → normalize → compress/limit).
-    Overwrites the original file on success. Falls back to original on any error.
-    Capped at 120 s so a slow run never blocks the bot.
-    """
     if not HAS_FIX_AUDIO:
         return video_path
-
     import concurrent.futures
     base, ext = os.path.splitext(video_path)
     out_path  = base + "_fixed" + ext
-
     def _run():
         _fix_audio_process(video_path, out_path, target_db=-6.0)
-
     print("  🎵 Enhancing audio (noise-reduce + normalize)...")
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(_run)
-            fut.result(timeout=120)          # 120 s ceiling; short vids: ~10-30 s
-        os.replace(out_path, video_path)     # swap in-place, same filename
+            fut.result(timeout=120)
+        os.replace(out_path, video_path)
         print("  ✅ Audio enhanced.")
     except concurrent.futures.TimeoutError:
         print("  ⚠️ Audio enhancement timed out (>120 s) — using original.")
@@ -493,7 +482,6 @@ def enhance_video_audio(video_path: str) -> str:
             except: pass
     return video_path
 
-
 def fetch_post_media(post: dict) -> tuple[str | None, bool]:
     url      = post.get("media_url")
     is_video = post.get("is_video", False)
@@ -505,7 +493,6 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
             path = download_video_redgifs(url)
             if not path:
                 path = download_video_redgifs(post["permalink"])
-            # direct download silent হলে yt-dlp দিয়ে retry
             if path and not has_audio_stream(path):
                 print("  🔇 Redgifs direct download silent — retrying with yt-dlp...")
                 try:
@@ -530,7 +517,7 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
     return path, False
 
 # ═══════════════════════════════════════════════════════════
-# LOCAL TITLE REWRITE (synonym replacement)
+# LOCAL TITLE REWRITE
 # ═══════════════════════════════════════════════════════════
 def rewrite_title_locally(original: str) -> str:
     synonyms = {
@@ -582,7 +569,7 @@ def rewrite_title_locally(original: str) -> str:
     return " ".join(new_words)
 
 # ═══════════════════════════════════════════════════════════
-# GROK REWRITE (reuses existing X browser context)
+# GROK REWRITE
 # ═══════════════════════════════════════════════════════════
 def grok_rewrite_using_context(context, original: str) -> str | None:
     page = context.new_page()
@@ -590,7 +577,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         print("  🌐 Grok page loading...")
         page.goto("https://x.com/i/grok", wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
-
         textarea = None
         for sel in ['textarea[placeholder="Ask anything"]', 'textarea']:
             try:
@@ -603,7 +589,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         if not textarea:
             print("  ❌ Grok textarea not found.")
             return None
-
         prompt = (
             f"Rewrite this sentence,\n"
             f"keep same meaning with aggressive words. Then add 2-3 relevant NSFW hashtags "
@@ -617,7 +602,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         page.wait_for_timeout(500)
         textarea.fill(prompt)
         page.wait_for_timeout(random.uniform(500, 800))
-
         sent = False
         for btn_sel in [
             'button[aria-label="Send"]',
@@ -634,10 +618,8 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                 continue
         if not sent:
             page.keyboard.press("Enter")
-
         print("  ⏳ Waiting for Grok response...")
         page.wait_for_timeout(15000)
-
         response_text = ""
         for _ in range(20):
             page.wait_for_timeout(1500)
@@ -657,7 +639,6 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                 pass
             if response_text:
                 break
-
         if response_text:
             title_part = ""
             tags_part  = ""
@@ -699,13 +680,12 @@ def rewrite_with_grok_or_local(context, original: str) -> str:
     return rewrite_title_locally(original)
 
 # ═══════════════════════════════════════════════════════════
-# TWEET BUILDING (hook + suffix)
+# TWEET BUILDING
 # ═══════════════════════════════════════════════════════════
 def build_hook_tweet(post: dict, source_name: str, source_type: str,
                      has_video: bool, context) -> str:
     original_title = post["title"].strip()
     ai_result = rewrite_with_grok_or_local(context, original_title)
-
     if ai_result:
         lines     = ai_result.strip().splitlines()
         tag_lines = [l for l in lines if l.strip().startswith("#")]
@@ -721,8 +701,6 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
     else:
         title    = rewrite_title_locally(original_title)
         hashtags = "#NSFW #Reddit"
-
-    # Creator posts → u/creator. Subreddit posts → u/author (fallback: r/subreddit)
     if source_type == "user":
         suffix = f"\n\nu/{source_name}"
     else:
@@ -731,80 +709,60 @@ def build_hook_tweet(post: dict, source_name: str, source_type: str,
             suffix = f"\n\nu/{author}"
         else:
             suffix = f"\n\nr/{source_name}"
-
     hashtag_block = f"\n{hashtags}" if hashtags else ""
     tweet = title + hashtag_block + suffix
-
     if len(tweet) > 280:
         max_title = 280 - len(hashtag_block) - len(suffix) - 3
         title = title[:max_title] + "..."
         tweet = title + hashtag_block + suffix
-
     return tweet
 
 # ═══════════════════════════════════════════════════════════
-# PINNED TWEET — fetch once per session, comment on 50% of posts
+# PINNED TWEET
 # ═══════════════════════════════════════════════════════════
 _PINNED_CACHE: dict = {"text": None, "media_path": None, "is_video": False, "fetched": False}
 
-
 def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> dict:
-    """
-    PINNED_TWEET_URL env থেকে URL নিয়ে text + video দুটোই নেয়।
-    ভিডিও থাকলে download_video_ytdlp দিয়ে download করে — audio enhance করে না।
-    """
     global _PINNED_CACHE
     if _PINNED_CACHE["fetched"]:
         return _PINNED_CACHE
-
     if not PINNED_TWEET_URL:
         print("⚠️ PINNED_TWEET_URL not set — comments will be skipped.")
         _PINNED_CACHE["fetched"] = True
         return _PINNED_CACHE
-
     print(f"\n📌 Fetching pinned tweet from: {PINNED_TWEET_URL}")
     try:
         page.goto(PINNED_TWEET_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
-
-        # ── Text ──────────────────────────────────────────────
         text_el  = page.query_selector('div[data-testid="tweetText"]')
         pin_text = text_el.inner_text().strip() if text_el else ""
         pin_text = re.sub(r'https?://\n+', '', pin_text)
         pin_text = re.sub(r'\n{3,}', '\n\n', pin_text)
         _PINNED_CACHE["text"] = pin_text
         print(f"  ✅ Pinned text: {pin_text[:70]!r}")
-
-        # ── Video detection ───────────────────────────────────
         has_video = bool(
             page.query_selector('div[data-testid="videoPlayer"]') or
             page.query_selector('video')
         )
-
         media_path = None
         if has_video:
-            print("  🎬 Video detected — downloading with yt-dlp...")
-            media_path = download_video_ytdlp(PINNED_TWEET_URL)  # এখন থেকে এটাই ক্লিন
+            print("  🎬 Video detected — downloading with yt-dlp (no audio enhance)...")
+            media_path = download_video_ytdlp(PINNED_TWEET_URL)
             if media_path:
                 print(f"  ✅ Pinned video ready: {media_path}")
             else:
                 print("  ⚠️ Could not download pinned tweet video — text-only comment.")
         else:
             print("  ℹ️ No video on pinned tweet — text-only comment.")
-
         _PINNED_CACHE["media_path"] = media_path
         _PINNED_CACHE["is_video"]   = bool(media_path)
         _PINNED_CACHE["fetched"]    = True
-
     except Exception as e:
         print(f"  ❌ fetch_pinned_tweet_content error: {e}")
         _PINNED_CACHE["fetched"] = True
-
     return _PINNED_CACHE
 
-
 def get_own_username(page) -> str | None:
-    """Get the logged-in account's X username from the sidebar profile link."""
     try:
         link = page.query_selector('a[data-testid="AppTabBar_Profile_Link"]')
         if link:
@@ -817,14 +775,11 @@ def get_own_username(page) -> str | None:
         print(f"  ⚠️ get_own_username error: {e}")
     return None
 
-
 def get_latest_tweet_url(page, own_username: str) -> str | None:
-    """Return the URL of the most recently posted (non-pinned) tweet."""
     try:
         page.goto(f"https://x.com/{own_username}", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(4000)
         for tweet in page.query_selector_all('article[data-testid="tweet"]')[:6]:
-            # Skip pinned
             try:
                 ctx = tweet.query_selector('[data-testid="socialContext"]')
                 if ctx and "pinned" in ctx.inner_text().lower():
@@ -841,9 +796,7 @@ def get_latest_tweet_url(page, own_username: str) -> str | None:
         print(f"  ⚠️ get_latest_tweet_url error: {e}")
     return None
 
-
 def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
-    """Reply to the most recently posted tweet with pinned tweet text + video (if any)."""
     if not pinned_data.get("text"):
         print("  ⚠️ Pinned tweet has no text — skipping comment.")
         return False
@@ -852,27 +805,21 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
         if not tweet_url:
             print("  ❌ Could not find latest tweet URL for comment.")
             return False
-
         print(f"  💬 Commenting on: {tweet_url}")
         page.goto(tweet_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(4000)
-
         reply_btns = page.query_selector_all('button[data-testid="reply"]')
         if not reply_btns:
             print("  ❌ Reply button not found.")
             return False
         reply_btns[0].click()
         page.wait_for_timeout(2000)
-
         textarea = page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=15000)
         if not textarea:
             print("  ❌ Reply textarea not found.")
             return False
-
         human_type(page, textarea, pinned_data["text"])
         page.wait_for_timeout(1000)
-
-        # ── Video attach ──────────────────────────────────────
         media_path = pinned_data.get("media_path")
         if media_path and os.path.exists(media_path):
             print(f"  📎 Attaching pinned video: {os.path.basename(media_path)}")
@@ -901,7 +848,6 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
                 print(f"  ⚠️ Media attach error: {e} — continuing text-only.")
         elif media_path:
             print(f"  ⚠️ Pinned video missing on disk — text-only comment.")
-
         try:
             btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
         except:
@@ -910,11 +856,9 @@ def comment_on_latest_post(page, own_username: str, pinned_data: dict) -> bool:
         page.wait_for_timeout(5000)
         print("  ✅ Comment posted!")
         return True
-
     except Exception as e:
         print(f"  ❌ comment_on_latest_post error: {e}")
         return False
-
 
 # ═══════════════════════════════════════════════════════════
 # X POSTING HELPERS
@@ -942,14 +886,11 @@ def human_type(page, element, text):
 def type_and_submit(page, text, media_paths):
     viewport = page.viewport_size
     human_mouse_move(page, viewport['width']//2, viewport['height']//2)
-    textarea = page.wait_for_selector(
-        'div[data-testid="tweetTextarea_0"]', timeout=25000
-    )
+    textarea = page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=25000)
     box = textarea.bounding_box()
     human_mouse_move(page, box['x'] + box['width']//2, box['y'] + box['height']//2)
     human_type(page, textarea, text)
     page.wait_for_timeout(random.randint(800, 1500))
-
     if media_paths:
         has_video = False
         for mp in media_paths:
@@ -969,7 +910,6 @@ def type_and_submit(page, text, media_paths):
                     print(f"  ⚠️ Attach button not found.")
             except Exception as e:
                 print(f"  ⚠️ Media attach error: {e}")
-
         if has_video:
             page.wait_for_timeout(3000)
             try:
@@ -986,7 +926,6 @@ def type_and_submit(page, text, media_paths):
                 print("  ⚠️ Preview not confirmed, continuing anyway.")
         else:
             page.wait_for_timeout(random.randint(3000, 5000))
-
     try:
         btn = page.wait_for_selector('div[data-testid="tweetButtonInline"]', timeout=8000)
     except:
@@ -1010,9 +949,7 @@ def open_compose_and_post(page, text, media_paths):
                 if method == "keyboard":
                     page.keyboard.press("n")
                 else:
-                    btn = page.wait_for_selector(
-                        'a[data-testid="SideNav_NewTweet_Button"]', timeout=15000
-                    )
+                    btn = page.wait_for_selector('a[data-testid="SideNav_NewTweet_Button"]', timeout=15000)
                     box = btn.bounding_box()
                     human_mouse_move(page, box['x'] + box['width']//2, box['y'] + box['height']//2)
                     btn.click()
@@ -1085,7 +1022,6 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
         print(f"🏘️  Posting to community: {chosen_community[:60]}")
     else:
         print("👤 Posting to profile.")
-
     sources = []
     if TARGET_CREATORS:
         for u in TARGET_CREATORS:
@@ -1094,14 +1030,12 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
         for s in TARGET_SUBREDDITS:
             sources.append(("subreddit", s))
     if not sources:
-        print("❌ No Reddit sources configured. Set TARGET_CREATORS or TARGET_SUBREDDITS.")
+        print("❌ No Reddit sources configured.")
         return False
-
     random.shuffle(sources)
     chosen_source_type = None
     chosen_source_name = None
     chosen_post        = None
-
     print("📡 Scanning Reddit sources...")
     for source_type, source_id in sources:
         if source_type == "user":
@@ -1110,7 +1044,6 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
         else:
             print(f"🔖 r/{source_id} checking...")
             posts = get_subreddit_posts_playwright(source_id)
-
         time.sleep(random.uniform(1.5, 3.0))
         if not posts:
             continue
@@ -1121,7 +1054,6 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
         videos = [p for p in unposted if p.get("is_video")]
         images = [p for p in unposted if not p.get("is_video")]
         print(f"  📊 Unposted: {len(unposted)} | Video: {len(videos)} | Image: {len(images)}")
-        chosen_post = None
         want_video = random.random() < 0.80
         if want_video and videos:
             chosen_post = random.choice(videos)
@@ -1136,18 +1068,13 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
             chosen_source_name = source_id
             print(f"  ✅ Selected: {chosen_post['title'][:60]}")
             break
-
     if not chosen_post:
         print("\n⚠️  No new Reddit posts found.")
         return False
-
     print(f"\n🏆 Final: @{chosen_source_name} ({chosen_source_type}) - {chosen_post['title'][:80]}")
-
     print("📥 Downloading media...")
     media_path, is_video = fetch_post_media(chosen_post)
     print(f"   Media: {media_path or 'None'} | Video: {is_video}")
-
-    # Silent video চেক — audio stream না থাকলে skip করো
     if is_video and media_path:
         if not has_audio_stream(media_path):
             print("  🔇 Silent video detected — skipping this post.")
@@ -1158,12 +1085,9 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
             if silent_skip_ids is not None:
                 silent_skip_ids.add(chosen_post["id"])
             return False
-
     print("🤖 Building tweet...")
-    hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type,
-                                  is_video, context)
+    hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type, is_video, context)
     print(f"   Tweet: {hook_tweet}")
-
     media_list = [media_path] if media_path else []
     posted = False
     if post_destination == "community":
@@ -1172,22 +1096,17 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
             increment_community_counter(chosen_community)
     else:
         posted = open_compose_and_post(page, hook_tweet, media_list)
-
     if not posted:
         print("❌ Post failed.")
         return False
-
     posted_cache = mark_as_posted(chosen_post["id"], posted_cache)
     limit_reached = increment_daily_counter()
     print("✅ Post successful!")
-
-    # 50% chance: comment on the just-posted tweet with pinned tweet content
     if pinned_data.get("text"):
         if random.random() < 0.5:
             print("\n💬 Triggering pinned-tweet comment (50% chance hit)...")
             page.wait_for_timeout(random.randint(10000, 18000))
             comment_on_latest_post(page, own_username, pinned_data)
-
     if limit_reached:
         print("🎯 Daily post limit reached.")
     if media_path and os.path.exists(media_path):
@@ -1201,7 +1120,6 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
 # MAIN LOOP
 # ═══════════════════════════════════════════════════════════
 def human_delay(iteration, hour):
-    # ৬ ঘণ্টায় ৩-৪ পোস্টের উপযোগী দীর্ঘ বিরতি
     if 6 <= hour < 10:
         base = random.randint(60, 100) * 60
     elif 10 <= hour < 16:
@@ -1210,7 +1128,6 @@ def human_delay(iteration, hour):
         base = random.randint(60, 100) * 60
     else:
         base = random.randint(80, 130) * 60
-    # ইটারেশন খুব কম, কোনো গুণক দরকার নেই
     return base
 
 def run_bot_loop():
@@ -1218,16 +1135,13 @@ def run_bot_loop():
         return
     if is_captcha_locked():
         return
-
     target, current = get_daily_limit()
     print(f"📊 Daily limit: {current}/{target}")
     if current >= target:
         print("🎯 Today's post limit already reached. Exiting.")
         return
-
-    MAX_DURATION = 6 * 3600   # GitHub Actions-এর সীমা
+    MAX_DURATION = 6 * 3600
     start_time = time.time()
-
     with sync_playwright() as p:
         headless = os.environ.get("HEADLESS", "false").lower() == "true"
         browser = p.chromium.launch(
@@ -1249,48 +1163,102 @@ def run_bot_loop():
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/136.0.0.0 Safari/537.36"
             ),
-            viewport={'width': 1920, 'height': 1080}
+            viewport={'width': 1920, 'height': 1080},
         )
         page = context.new_page()
 
-        # context-এ inject করো — এই context থেকে খোলা সব page-এ automatically apply হবে
         context.add_init_script("""
+            // ── webdriver hide ────────────────────────────────────
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-            window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
-            Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-            Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
 
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            // ── Plugins — real Plugin objects ─────────────────────
+            const makeMime = (type, suf) => ({ type, suffixes: suf, description: '', enabledPlugin: null });
+            const makePlugin = (name, desc, fn, mimes) => {
+                const p = { name, description: desc, filename: fn, length: mimes.length };
+                mimes.forEach((m, i) => { p[i] = m; m.enabledPlugin = p; });
+                p.item = i => p[i]; p.namedItem = n => mimes.find(m => m.type === n) || null;
+                return p;
+            };
+            const pdfMime = makeMime('application/pdf', 'pdf');
+            const plugins = [
+                makePlugin('PDF Viewer',               'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+                makePlugin('Chrome PDF Viewer',        'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+                makePlugin('Chromium PDF Viewer',      'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+                makePlugin('Microsoft Edge PDF Viewer','Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+                makePlugin('WebKit built-in PDF',      'Portable Document Format', 'internal-pdf-viewer', [pdfMime]),
+            ];
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => Object.assign(plugins, {
+                    item: i => plugins[i],
+                    namedItem: n => plugins.find(p => p.name === n) || null,
+                    refresh: () => {}
+                })
+            });
+
+            // ── vendor ────────────────────────────────────────────
+            Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+
+            // ── userAgentData — single const (same reference) ─────
+            const _uaData = {
+                brands: [
+                    {brand: 'Chromium',       version: '136'},
+                    {brand: 'Google Chrome',  version: '136'},
+                    {brand: 'Not/A)Brand',    version: '99'},
+                ],
+                mobile: false,
+                platform: 'Windows',
+                getHighEntropyValues: async (hints) => ({
+                    architecture: 'x86', bitness: '64',
+                    brands: [{brand: 'Google Chrome', version: '136.0.7103.93'}],
+                    fullVersionList: [{brand: 'Google Chrome', version: '136.0.7103.93'}],
+                    mobile: false, model: '', platform: 'Windows',
+                    platformVersion: '15.0.0', uaFullVersion: '136.0.7103.93',
+                })
+            };
+            Object.defineProperty(navigator, 'userAgentData', {get: () => _uaData});
+
+            // ── hardware ──────────────────────────────────────────
+            Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+            Object.defineProperty(navigator, 'deviceMemory',        {get: () => 8});
+            Object.defineProperty(navigator, 'languages',           {get: () => ['en-US', 'en']});
+            Object.defineProperty(navigator, 'platform',            {get: () => 'Win32'});
+
+            // ── chrome object ─────────────────────────────────────
+            window.chrome = {
+                runtime: {id: undefined, connect: () => {}, sendMessage: () => {}},
+                loadTimes: function(){}, csi: function(){}, app: {}
+            };
+
+            // ── WebGL ─────────────────────────────────────────────
+            const _origGetParam = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
                 if (parameter === 37445) return 'Google Inc. (Intel)';
                 if (parameter === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                return getParameter.call(this, parameter);
+                return _origGetParam.call(this, parameter);
             };
 
-            const originalCreateOscillator = AudioContext.prototype.createOscillator;
+            // ── AudioContext fingerprint randomize ────────────────
+            const _origOsc = AudioContext.prototype.createOscillator;
             AudioContext.prototype.createOscillator = function() {
-                const osc = originalCreateOscillator.apply(this, arguments);
-                const originalStart = osc.start;
+                const osc = _origOsc.apply(this, arguments);
+                const _origStart = osc.start;
                 osc.start = function() {
-                    setTimeout(() => originalStart.apply(this, arguments), Math.random() * 2);
+                    setTimeout(() => _origStart.apply(this, arguments), Math.random() * 2);
                 };
                 return osc;
             };
 
-            const originalQuery = window.navigator.permissions.query;
+            // ── permissions.query ─────────────────────────────────
+            const _origQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
                     Promise.resolve({state: Notification.permission}) :
-                    originalQuery(parameters)
+                    _origQuery(parameters)
             );
         """)
 
         print(f"\n🤖 Reddit→X Bot started — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Get own username and cache pinned tweet content once per session
         page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(4000)
         own_username = get_own_username(page)
@@ -1301,39 +1269,33 @@ def run_bot_loop():
             print("⚠️ Could not determine own username — pinned-tweet comments disabled.")
 
         iteration = 0
-        SIESTA_EVERY = random.randint(15, 20)
-        silent_skip_ids: set = set()  # session-এ silent বলে চেনা post_id গুলো   # এই বটে অত বার সিয়েস্তা আসবে না
+        SIESTA_EVERY   = random.randint(15, 20)
+        silent_skip_ids: set = set()
 
         while True:
             target, current = get_daily_limit()
             if current >= target:
                 print("🎯 Daily limit reached. Stopping.")
                 break
-
             elapsed = time.time() - start_time
             if elapsed > MAX_DURATION - 300:
                 print("⏰ Approaching 6-hour limit. Exiting loop.", flush=True)
                 break
-
             if is_captcha_locked():
                 print("🔒 Captcha lock active. Exiting loop.", flush=True)
                 break
-
             if iteration > 0 and iteration % SIESTA_EVERY == 0:
                 siesta = random.randint(45, 90) * 60
                 print(f"\n☕ Siesta for {siesta//60} minutes...", flush=True)
                 time.sleep(siesta)
                 continue
-
             iteration += 1
             now = datetime.now()
             print(f"\n🔄 Iteration {iteration} — {now.strftime('%H:%M:%S')}", flush=True)
-
             posted_cache = load_posted_cache()
             success = perform_reddit_post(page, context, posted_cache, own_username or '', pinned_data, silent_skip_ids)
             if not success:
                 print("⚠️ Post failed, continuing after delay.", flush=True)
-
             delay = human_delay(iteration, now.hour)
             print(f"⏳ Next post in {delay//60} minutes...", flush=True)
             time.sleep(delay)
