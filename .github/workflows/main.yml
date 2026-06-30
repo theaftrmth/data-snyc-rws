@@ -59,6 +59,7 @@ jobs:
           TARGET_CREATORS: ${{ secrets.TARGET_CREATORS }}
           TARGET_SUBREDDITS: ${{ secrets.TARGET_SUBREDDITS }}
           PINNED_TWEET_URL: ${{ secrets.PINNED_TWEET_URL }}
+          OWN_USERNAME: ${{ secrets.OWN_USERNAME }}
           HEADLESS: "false"
           PYTHONUNBUFFERED: 1
         run: xvfb-run python rws.py
