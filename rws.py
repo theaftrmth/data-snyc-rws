@@ -580,7 +580,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             return None
         prompt = (
             f"Rewrite this sentence,\n"
-            f"keep same meaning with aggressive words. Then add 2-3 relevant NSFW hashtags "
+            f"Rewrite this in casual, sexual and simple human like words. Then add 2-3 relevant NSFW hashtags "
             f"that people actually search (do NOT use #NSFW). "
             f"return only result.\n"
             f"[rewritten sentence]\n"
@@ -643,9 +643,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             title_part = re.sub(r'\*+|_+|#+|`+', "", title_part).strip().strip('"\' ')
             tags_part  = tags_part.strip()
             if title_part and not any(p in title_part.lower() for p in [
-                "i'm sorry", "i cannot", "i can't", "i am unable", "not able to",
-                "inappropriate", "against my", "my guidelines", "i apologize",
-                "as an ai", "i must decline", "i won't", "cannot assist"
+                "i am sorry", "i can't fulfill", "grok questions", "sign up"
             ]):
                 result = title_part
                 if tags_part:
