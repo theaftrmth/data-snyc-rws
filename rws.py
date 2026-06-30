@@ -441,6 +441,7 @@ def download_video_ytdlp(url: str) -> str | None:
     return None
 
 def has_audio_stream(video_path: str) -> bool:
+    """(বর্তমানে ব্যবহার হচ্ছে না — ভবিষ্যতের জন্য রাখা হলো)"""
     try:
         cmd = [
             "ffprobe", "-v", "error",
@@ -490,18 +491,8 @@ def fetch_post_media(post: dict) -> tuple[str | None, bool]:
         return None, False
     if is_video:
         if "redgifs.com" in url or "redgifs.com" in post.get("permalink", ""):
+            # Redgifs থেকে সরাসরি ডাউনলোড — কোনো সাইলেন্ট চেক ছাড়াই ব্যবহার হবে
             path = download_video_redgifs(url)
-            if path and not has_audio_stream(path):
-                print("  🔇 Redgifs direct download silent — retrying with yt-dlp...")
-                try:
-                    os.remove(path)
-                except:
-                    pass
-                path = download_video_ytdlp(url)
-                if path:
-                    print(f"  ✅ yt-dlp fallback success: {path}")
-                else:
-                    print("  ❌ yt-dlp fallback also failed — post will be skipped.")
         else:
             path = download_video_ytdlp(url)
             if not path:
@@ -589,7 +580,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             return None
         prompt = (
             f"Rewrite this sentence,\n"
-            f"rewrite this in casual, sexual and simple human like words. Then add 2-3 relevant NSFW hashtags "
+            f"keep same meaning with aggressive words. Then add 2-3 relevant NSFW hashtags "
             f"that people actually search (do NOT use #NSFW). "
             f"return only result.\n"
             f"[rewritten sentence]\n"
@@ -1068,16 +1059,7 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
     print("📥 Downloading media...")
     media_path, is_video = fetch_post_media(chosen_post)
     print(f"   Media: {media_path or 'None'} | Video: {is_video}")
-    if is_video and media_path:
-        if not has_audio_stream(media_path):
-            print("  🔇 Silent video detected — skipping this post.")
-            try:
-                os.remove(media_path)
-            except:
-                pass
-            if silent_skip_ids is not None:
-                silent_skip_ids.add(chosen_post["id"])
-            return False
+    # ═══ সাইলেন্ট ভিডিও চেক সরানো হয়েছে — এখন সব ভিডিও সরাসরি পোস্ট হবে ═══
     print("🤖 Building tweet...")
     hook_tweet = build_hook_tweet(chosen_post, chosen_source_name, chosen_source_type, is_video, context)
     print(f"   Tweet: {hook_tweet}")
@@ -1263,7 +1245,7 @@ def run_bot_loop():
 
         iteration = 0
         SIESTA_EVERY   = random.randint(15, 20)
-        silent_skip_ids: set = set()
+        silent_skip_ids: set = set()  # এখন আর ব্যবহার হয় না, রাখা হলো নিরাপত্তার জন্য
 
         while True:
             target, current = get_daily_limit()
