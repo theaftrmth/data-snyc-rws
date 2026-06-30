@@ -558,7 +558,7 @@ def rewrite_title_locally(original: str) -> str:
     return " ".join(new_words)
 
 # ═══════════════════════════════════════════════════════════
-# GROK REWRITE (শুধু টাইমিং ফিক্স — লজিক অপরিবর্তিত)
+# GROK REWRITE (ধীরগতির রেসপন্সের জন্য টাইমিং আপডেট)
 # ═══════════════════════════════════════════════════════════
 def grok_rewrite_using_context(context, original: str) -> str | None:
     page = context.new_page()
@@ -612,11 +612,11 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             page.keyboard.press("Enter")
 
         print("  ⏳ Waiting for Grok response...")
+        # প্রথম ১৫ সেকেন্ড অপেক্ষা, তারপর ৩০টি চেক (প্রতি ১.৫ সেকেন্ড) — মোট ৬০ সেকেন্ড
         page.wait_for_timeout(15000)
 
-        # প্রথম নন-থিংকিং টেক্সট আসা পর্যন্ত অপেক্ষা
         first_chunk = ""
-        for _ in range(20):
+        for _ in range(30):  # আগে ২০ ছিল, এখন ৩০ (মোট ৪৫ সেকেন্ড অতিরিক্ত)
             page.wait_for_timeout(1500)
             try:
                 els = page.query_selector_all("div.r-1wbh5a2.r-11niif6.r-bnwqim.r-13qz1uu")
@@ -639,9 +639,9 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             print("  ⚠️  Grok no response.")
             return None
 
-        # অতিরিক্ত ৫ সেকেন্ড অপেক্ষা — সম্পূর্ণ রেসপন্স আসার জন্য
-        print("  ⏳ Grok started responding — waiting 5s for full response...")
-        page.wait_for_timeout(5000)
+        # অতিরিক্ত ৭ সেকেন্ড অপেক্ষা — সম্পূর্ণ রেসপন্স আসার জন্য
+        print("  ⏳ Grok started responding — waiting 7s for full response...")
+        page.wait_for_timeout(7000)
 
         # সব নন-থিংকিং ব্লক একত্রিত করি
         response_text = ""
