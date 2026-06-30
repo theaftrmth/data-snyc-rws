@@ -761,16 +761,11 @@ def fetch_pinned_tweet_content(page, own_username: str = "", context=None) -> di
     return _PINNED_CACHE
 
 def get_own_username(page) -> str | None:
-    try:
-        link = page.query_selector('a[data-testid="AppTabBar_Profile_Link"]')
-        if link:
-            href = (link.get_attribute("href") or "").strip("/")
-            username = href.split("/")[-1]
-            if username:
-                print(f"👤 Own username: @{username}")
-                return username
-    except Exception as e:
-        print(f"  ⚠️ get_own_username error: {e}")
+    username = os.environ.get("OWN_USERNAME", "").strip().lstrip("@")
+    if username:
+        print(f"👤 Own username (env): @{username}")
+        return username
+    print("⚠️ OWN_USERNAME not set in environment.")
     return None
 
 def get_latest_tweet_url(page, own_username: str) -> str | None:
