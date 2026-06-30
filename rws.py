@@ -558,7 +558,7 @@ def rewrite_title_locally(original: str) -> str:
     return " ".join(new_words)
 
 # ═══════════════════════════════════════════════════════════
-# GROK REWRITE
+# GROK REWRITE (শুধু টাইমিং ফিক্স — লজিক অপরিবর্তিত)
 # ═══════════════════════════════════════════════════════════
 def grok_rewrite_using_context(context, original: str) -> str | None:
     page = context.new_page()
@@ -566,6 +566,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         print("  🌐 Grok page loading...")
         page.goto("https://x.com/i/grok", wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
+
         textarea = None
         for sel in ['textarea[placeholder="Ask anything"]', 'textarea']:
             try:
@@ -578,6 +579,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         if not textarea:
             print("  ❌ Grok textarea not found.")
             return None
+
         prompt = (
             f"Rewrite this sentence,\n"
             f"Rewrite this in casual, sexual and simple human like words. Then add 2-3 relevant NSFW hashtags "
@@ -591,6 +593,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
         page.wait_for_timeout(500)
         textarea.fill(prompt)
         page.wait_for_timeout(random.uniform(500, 800))
+
         sent = False
         for btn_sel in [
             'button[aria-label="Send"]',
@@ -607,9 +610,12 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                 continue
         if not sent:
             page.keyboard.press("Enter")
+
         print("  ⏳ Waiting for Grok response...")
         page.wait_for_timeout(15000)
-        response_text = ""
+
+        # প্রথম নন-থিংকিং টেক্সট আসা পর্যন্ত অপেক্ষা
+        first_chunk = ""
         for _ in range(20):
             page.wait_for_timeout(1500)
             try:
@@ -622,37 +628,71 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
                             "processing your", "considering your", "analyzing"
                         ]):
                             continue
-                        response_text = txt
+                        first_chunk = txt
                         break
             except:
                 pass
-            if response_text:
+            if first_chunk:
                 break
-        if response_text:
-            title_part = ""
-            tags_part  = ""
-            for line in response_text.splitlines():
-                line = line.strip()
-                if line.upper().startswith("TITLE:"):
-                    title_part = line[6:].strip()
-                elif line.upper().startswith("TAGS:"):
-                    tags_part = line[5:].strip()
-            if not title_part:
-                title_part = response_text.strip()
-            title_part = re.sub(r'^(Rewritten:|Original:|Title:|Output:)\s*', "", title_part, flags=re.IGNORECASE)
-            title_part = re.sub(r'\*+|_+|#+|`+', "", title_part).strip().strip('"\' ')
-            tags_part  = tags_part.strip()
-            if title_part and not any(p in title_part.lower() for p in [
-                "i am sorry", "i can't fulfill", "grok questions", "sign up"
-            ]):
-                result = title_part
-                if tags_part:
-                    result = result + "\n" + tags_part
-                print(f"  ✅ Grok title: {title_part[:70]}")
-                return result
-            print("  ⚠️  Grok refused/empty.")
-        else:
+
+        if not first_chunk:
             print("  ⚠️  Grok no response.")
+            return None
+
+        # অতিরিক্ত ৫ সেকেন্ড অপেক্ষা — সম্পূর্ণ রেসপন্স আসার জন্য
+        print("  ⏳ Grok started responding — waiting 5s for full response...")
+        page.wait_for_timeout(5000)
+
+        # সব নন-থিংকিং ব্লক একত্রিত করি
+        response_text = ""
+        try:
+            els = page.query_selector_all("div.r-1wbh5a2.r-11niif6.r-bnwqim.r-13qz1uu")
+            for el in els:
+                txt = el.inner_text().strip()
+                if not txt or len(txt) <= 5:
+                    continue
+                if prompt[:20] in txt:
+                    continue
+                if any(t in txt.lower() for t in [
+                    "thinking about", "let me think", "i'm thinking",
+                    "processing your", "considering your", "analyzing"
+                ]):
+                    continue
+                response_text += txt + "\n"
+        except:
+            pass
+
+        response_text = response_text.strip()
+        if not response_text:
+            print("  ⚠️  Grok empty response.")
+            return None
+
+        # TITLE / TAGS পার্সিং (আগের লজিক অপরিবর্তিত)
+        title_part = ""
+        tags_part  = ""
+        for line in response_text.splitlines():
+            line = line.strip()
+            if line.upper().startswith("TITLE:"):
+                title_part = line[6:].strip()
+            elif line.upper().startswith("TAGS:"):
+                tags_part = line[5:].strip()
+        if not title_part:
+            title_part = response_text
+
+        title_part = re.sub(r'^(Rewritten:|Original:|Title:|Output:)\s*', "", title_part, flags=re.IGNORECASE)
+        title_part = re.sub(r'\*+|_+|`+', "", title_part).strip().strip('"\' ')
+        tags_part  = tags_part.strip()
+
+        if title_part and not any(p in title_part.lower() for p in [
+            "i am sorry", "i can't fulfill", "grok questions", "sign up"
+        ]):
+            result = title_part
+            if tags_part:
+                result = result + "\n" + tags_part
+            print(f"  ✅ Grok title: {title_part[:70]}")
+            return result
+        else:
+            print("  ⚠️  Grok refused/empty.")
     except Exception as e:
         print(f"  ⚠️  Grok error: {e}")
     finally:
