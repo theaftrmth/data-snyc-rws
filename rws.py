@@ -589,7 +589,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
             return None
         prompt = (
             f"Rewrite this sentence,\n"
-            f"keep same meaning with aggressive words. Then add 2-3 relevant NSFW hashtags "
+            f"rewrite this in casual, sexual and simple human like words. Then add 2-3 relevant NSFW hashtags "
             f"that people actually search (do NOT use #NSFW). "
             f"return only result.\n"
             f"[rewritten sentence]\n"
