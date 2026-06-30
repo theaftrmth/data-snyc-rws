@@ -1078,7 +1078,7 @@ def perform_reddit_post(page, context, posted_cache, own_username: str, pinned_d
     limit_reached = increment_daily_counter()
     print("✅ Post successful!")
     if pinned_data.get("text"):
-        if random.random() < 0.5:
+        if random.random() < 1.0:
             print("\n💬 Triggering pinned-tweet comment (50% chance hit)...")
             page.wait_for_timeout(random.randint(10000, 18000))
             comment_on_latest_post(page, own_username, pinned_data)
