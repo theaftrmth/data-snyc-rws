@@ -430,8 +430,8 @@ def download_video_ytdlp(url: str) -> str | None:
         res = subprocess.run(cmd, timeout=180, capture_output=True, text=True)
         if res.returncode == 0 and os.path.exists(out):
             size = os.path.getsize(out)
-            if size > 50 * 1024 * 1024:
-                print("  ⚠️  Video >50MB — skip")
+            if size > 100 * 1024 * 1024:
+                print("  ⚠️  Video >100MB — skip")
                 os.remove(out)
                 return None
             print(f"  📥 Video: {size//1024} KB")
@@ -582,7 +582,7 @@ def grok_rewrite_using_context(context, original: str) -> str | None:
 
         prompt = (
             f"Rewrite this sentence,\n"
-            f"Rewrite this in casual, sexual and simple human like words. Then add 2-3 relevant NSFW hashtags "
+            f"Rewrite this in casual, sexual and simple words. Then add 2-3 relevant NSFW hashtags "
             f"that people actually search (do NOT use #NSFW). "
             f"return only result.\n"
             f"[rewritten sentence]\n"
